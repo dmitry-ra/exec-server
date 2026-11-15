@@ -1,0 +1,1183 @@
+{
+  "openapi": "3.0.3",
+  "info": {
+    "title": "ExecServer",
+    "version": "0.1.0",
+    "description": "Thin authenticated HTTP proxy for native processes and byte streams. OpenAPI is the authoritative wire contract. Pipes only; no terminal emulation or restart recovery."
+  },
+  "servers": [
+    {
+      "url": "http://127.0.0.1:5050",
+      "description": "Default local listener; use an external SSH tunnel or TLS proxy for remote access."
+    }
+  ],
+  "security": [
+    {
+      "BearerApiKey": []
+    }
+  ],
+  "paths": {
+    "/v1/executions": {
+      "post": {
+        "operationId": "StartExecution",
+        "summary": "Launch one executable using pipes",
+        "description": "The shell is an ordinary executable. Args are passed separately without shell parsing. cwd and environment inherit the service defaults when omitted. The launch is not idempotent: a lost response may be investigated through the execution listing. waitMilliseconds=0 returns immediately; otherwise waiting is bounded and does not cancel the child. The server reports the current status and retains output independently of the HTTP connection.",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/StartExecutionRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Execution exited within the requested wait.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ExecutionInfo"
+                }
+              }
+            }
+          },
+          "202": {
+            "description": "Execution is running; use its id for future operations.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ExecutionInfo"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "409": {
+            "$ref": "#/components/responses/Conflict"
+          },
+          "500": {
+            "$ref": "#/components/responses/InternalServerError"
+          }
+        }
+      },
+      "get": {
+        "operationId": "ListExecutions",
+        "summary": "List retained managed executions",
+        "responses": {
+          "200": {
+            "description": "All retained execution records, including running and completed executions.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/ExecutionInfo"
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "409": {
+            "$ref": "#/components/responses/Conflict"
+          },
+          "500": {
+            "$ref": "#/components/responses/InternalServerError"
+          }
+        }
+      }
+    },
+    "/v1/executions/{id}": {
+      "parameters": [
+        {
+          "name": "id",
+          "in": "path",
+          "required": true,
+          "schema": {
+            "type": "string",
+            "minLength": 1
+          },
+          "description": "Opaque service-generated execution identifier, not an operating system PID."
+        }
+      ],
+      "get": {
+        "operationId": "GetExecution",
+        "summary": "Read metadata without consuming output",
+        "responses": {
+          "200": {
+            "description": "Current metadata.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ExecutionInfo"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "409": {
+            "$ref": "#/components/responses/Conflict"
+          },
+          "500": {
+            "$ref": "#/components/responses/InternalServerError"
+          }
+        }
+      },
+      "delete": {
+        "operationId": "DeleteExecution",
+        "summary": "Delete a completed execution and all its output",
+        "description": "A running execution cannot be deleted. This removes metadata and both output streams together. It is the explicit release operation for durable output.",
+        "responses": {
+          "204": {
+            "description": "Execution, metadata and both output streams removed."
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "409": {
+            "$ref": "#/components/responses/Conflict"
+          },
+          "500": {
+            "$ref": "#/components/responses/InternalServerError"
+          }
+        }
+      }
+    },
+    "/v1/executions/{id}/output": {
+      "parameters": [
+        {
+          "name": "id",
+          "in": "path",
+          "required": true,
+          "schema": {
+            "type": "string",
+            "minLength": 1
+          },
+          "description": "Opaque service-generated execution identifier, not an operating system PID."
+        }
+      ],
+      "get": {
+        "operationId": "ReadOutput",
+        "summary": "Read independent stdout and stderr portions",
+        "description": "All positions and limits count original bytes, before UTF-8 or base64 encoding. Omitted offsets start at zero, including already read data while retained. limit applies separately to each stream and is clamped to the configured API limit. requestedBytes is null when no explicit limit was requested. format defaults to text; invalid UTF-8 or an offset/portion inside an incomplete codepoint returns encoding_error with accumulatedBytes, never silent replacement or consumption. Long polling wakes on new output in either stream, capture completion, servicing error or deadline. A chunk larger than the inline threshold is a blob reference with returnedBytes=0 and unchanged nextOffset; obtaining a reference does not consume bytes. Fetch its raw content using the blob endpoint. Empty completed streams count as consumed. For durable=false, delivery of the final tail of each stream after root exit and capture finalization deletes both streams and metadata together; prior byte-range coverage is not tracked. durable=true retains the execution until explicit deletion.",
+        "parameters": [
+          {
+            "name": "stdoutOffset",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "format": "int64",
+              "minimum": 0
+            },
+            "description": "Raw byte position in stdout; defaults to zero."
+          },
+          {
+            "name": "stderrOffset",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "format": "int64",
+              "minimum": 0
+            },
+            "description": "Raw byte position in stderr; defaults to zero."
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "format": "int32",
+              "minimum": 1
+            },
+            "description": "Requested maximum raw bytes per stream; omitted means all available, capped by the configured API limit."
+          },
+          {
+            "name": "format",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "default": "text",
+              "pattern": "^(text|base64)$"
+            },
+            "description": "Explicit output representation; no content-based detection."
+          },
+          {
+            "name": "waitMilliseconds",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "format": "int32",
+              "minimum": 0
+            },
+            "description": "Bounded long-poll wait; new output wakes it immediately."
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Snapshot and independent output portions or blob references.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OutputResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "409": {
+            "$ref": "#/components/responses/Conflict"
+          },
+          "500": {
+            "$ref": "#/components/responses/InternalServerError"
+          }
+        }
+      }
+    },
+    "/v1/blobs/{blobId}": {
+      "parameters": [
+        {
+          "name": "blobId",
+          "in": "path",
+          "required": true,
+          "schema": {
+            "type": "string",
+            "minLength": 1
+          },
+          "description": "Opaque stream blob identifier; never a filesystem path."
+        }
+      ],
+      "get": {
+        "operationId": "ReadBlob",
+        "summary": "Read a raw binary portion",
+        "description": "Reads up to the configured raw-byte API limit. offset defaults to zero; limit is clamped by the server. X-Output-Offset, X-Output-Next-Offset, X-Output-Remaining-Bytes and X-Output-Total-Bytes report raw byte positions from this snapshot. A successful final-tail delivery participates in the same non-durable whole-execution cleanup rule as inline reads; merely requesting a blob reference does not.",
+        "parameters": [
+          {
+            "name": "offset",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "format": "int64",
+              "minimum": 0
+            },
+            "description": "Raw byte offset; defaults to zero."
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "format": "int32",
+              "minimum": 1
+            },
+            "description": "Requested raw byte count; omitted means the available remainder, capped by the API limit."
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Raw bytes from one captured stream.",
+            "headers": {
+              "X-Output-Offset": {
+                "description": "Raw byte count or position.",
+                "schema": {
+                  "type": "integer",
+                  "format": "int64",
+                  "minimum": 0
+                }
+              },
+              "X-Output-Next-Offset": {
+                "description": "Raw byte count or position.",
+                "schema": {
+                  "type": "integer",
+                  "format": "int64",
+                  "minimum": 0
+                }
+              },
+              "X-Output-Remaining-Bytes": {
+                "description": "Raw byte count or position.",
+                "schema": {
+                  "type": "integer",
+                  "format": "int64",
+                  "minimum": 0
+                }
+              },
+              "X-Output-Total-Bytes": {
+                "description": "Raw byte count or position.",
+                "schema": {
+                  "type": "integer",
+                  "format": "int64",
+                  "minimum": 0
+                }
+              }
+            },
+            "content": {
+              "application/octet-stream": {
+                "schema": {
+                  "type": "string",
+                  "format": "binary"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "409": {
+            "$ref": "#/components/responses/Conflict"
+          },
+          "500": {
+            "$ref": "#/components/responses/InternalServerError"
+          }
+        }
+      }
+    },
+    "/v1/executions/{id}/stdin": {
+      "parameters": [
+        {
+          "name": "id",
+          "in": "path",
+          "required": true,
+          "schema": {
+            "type": "string",
+            "minLength": 1
+          },
+          "description": "Opaque service-generated execution identifier, not an operating system PID."
+        }
+      ],
+      "post": {
+        "operationId": "WriteStdin",
+        "summary": "Write text or bytes to a running execution",
+        "description": "Writes are serialized per execution. Exactly one of text or binary may be supplied; binary is strict base64, text is UTF-8. close=true closes the pipe after the optional payload. Closing is an operation, not a Ctrl-D byte. Pipe mode does not interpret Ctrl-C bytes as a signal.",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/WriteStdinRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Write accepted into the child stdin pipe, optionally followed by EOF.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/StdinResult"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "409": {
+            "$ref": "#/components/responses/Conflict"
+          },
+          "500": {
+            "$ref": "#/components/responses/InternalServerError"
+          }
+        }
+      }
+    },
+    "/v1/executions/{id}/close-stdin": {
+      "parameters": [
+        {
+          "name": "id",
+          "in": "path",
+          "required": true,
+          "schema": {
+            "type": "string",
+            "minLength": 1
+          },
+          "description": "Opaque service-generated execution identifier, not an operating system PID."
+        }
+      ],
+      "post": {
+        "operationId": "CloseStdin",
+        "summary": "Close the execution's stdin pipe",
+        "description": "Repeated closure is harmless. Does not send a terminal control byte or signal.",
+        "responses": {
+          "200": {
+            "description": "Stdin is closed.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/StdinResult"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "409": {
+            "$ref": "#/components/responses/Conflict"
+          },
+          "500": {
+            "$ref": "#/components/responses/InternalServerError"
+          }
+        }
+      }
+    },
+    "/v1/executions/{id}/processes": {
+      "parameters": [
+        {
+          "name": "id",
+          "in": "path",
+          "required": true,
+          "schema": {
+            "type": "string",
+            "minLength": 1
+          },
+          "description": "Opaque service-generated execution identifier, not an operating system PID."
+        }
+      ],
+      "get": {
+        "operationId": "GetProcesses",
+        "summary": "Read a best-effort current descendant snapshot",
+        "description": "Returns a flat list of currently accessible PID/PPID/name records, including the managed root when present. Processes may exit during collection. No history, tree ownership guarantee or recursive shutdown is implied.",
+        "responses": {
+          "200": {
+            "description": "Current process snapshot.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/ProcessInfo"
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "409": {
+            "$ref": "#/components/responses/Conflict"
+          },
+          "500": {
+            "$ref": "#/components/responses/InternalServerError"
+          }
+        }
+      }
+    },
+    "/v1/signals": {
+      "post": {
+        "operationId": "SendSignal",
+        "summary": "Send a Unix signal directly to an operating system PID",
+        "description": "The API key grants the rights of the service account; this is not limited to managed execution IDs. Uses native Unix signal numbers. Windows explicitly rejects this operation with 501; no Unix signal emulation.",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SignalRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "204": {
+            "description": "Operating system accepted the signal."
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "409": {
+            "$ref": "#/components/responses/Conflict"
+          },
+          "500": {
+            "$ref": "#/components/responses/InternalServerError"
+          },
+          "501": {
+            "description": "Unix signals are unsupported on this operating system.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/status": {
+      "get": {
+        "operationId": "GetStatus",
+        "summary": "Read service state and operating system",
+        "description": "Available in both normal and draining states; authentication is still required.",
+        "responses": {
+          "200": {
+            "description": "Service status.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ServiceStatus"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "409": {
+            "$ref": "#/components/responses/Conflict"
+          },
+          "500": {
+            "$ref": "#/components/responses/InternalServerError"
+          }
+        }
+      }
+    },
+    "/v1/shutdown": {
+      "post": {
+        "operationId": "Shutdown",
+        "summary": "Enter draining mode and wait for managed root processes",
+        "description": "Rejects new launches, keeps existing I/O, metadata, diagnostics, signals and status available. Waits for directly managed roots only, then exits. Does not kill roots or descendants and has no automatic forced deadline. Ctrl-C requests the same transition.",
+        "responses": {
+          "202": {
+            "description": "Draining requested; existing execution operations remain available.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ServiceStatus"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "409": {
+            "$ref": "#/components/responses/Conflict"
+          },
+          "500": {
+            "$ref": "#/components/responses/InternalServerError"
+          }
+        }
+      }
+    },
+    "/v1/openapi.json": {
+      "get": {
+        "operationId": "GetSpecification",
+        "summary": "Read this normative OpenAPI document",
+        "description": "Returns the embedded source OpenAPI document. Requires the same Bearer API key as every other route. Served as static JSON rather than as a generated DTO.",
+        "responses": {
+          "200": {
+            "description": "OpenAPI 3.0.3 document describing this version of ExecServer.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": true
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          }
+        }
+      }
+    }
+  },
+  "components": {
+    "securitySchemes": {
+      "BearerApiKey": {
+        "type": "http",
+        "scheme": "bearer",
+        "bearerFormat": "API key",
+        "description": "A configured opaque API key. Required on every endpoint, including status, shutdown and the served specification. Requests without a valid key cause no process or stream mutation."
+      }
+    },
+    "schemas": {
+      "StreamInput": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "text": {
+            "type": "string",
+            "description": "UTF-8 text. Mutually exclusive with binary."
+          },
+          "binary": {
+            "type": "string",
+            "format": "byte",
+            "description": "Strict base64-encoded arbitrary bytes. Mutually exclusive with text."
+          }
+        },
+        "required": [],
+        "oneOf": [
+          {
+            "required": [
+              "text"
+            ],
+            "not": {
+              "required": [
+                "binary"
+              ]
+            }
+          },
+          {
+            "required": [
+              "binary"
+            ],
+            "not": {
+              "required": [
+                "text"
+              ]
+            }
+          }
+        ]
+      },
+      "StartExecutionRequest": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "executable": {
+            "type": "string",
+            "minLength": 1,
+            "description": "Executable path or name resolved through the service environment. No implicit shell."
+          },
+          "args": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "cwd": {
+            "type": "string",
+            "description": "Working directory, or service current directory if omitted."
+          },
+          "environment": {
+            "type": "object",
+            "additionalProperties": {
+              "type": "string"
+            },
+            "description": "Per-launch overrides merged into inherited environment."
+          },
+          "stdin": {
+            "$ref": "#/components/schemas/StreamInput"
+          },
+          "closeStdin": {
+            "type": "boolean",
+            "default": false,
+            "description": "Close stdin after initial optional input. Otherwise it remains open for later writes."
+          },
+          "durable": {
+            "type": "boolean",
+            "default": false,
+            "description": "Retain metadata and output until explicit deletion; does not survive restart."
+          },
+          "waitMilliseconds": {
+            "type": "integer",
+            "format": "int32",
+            "minimum": 0,
+            "description": "Zero returns immediately; omitted uses server's configured launch wait."
+          }
+        },
+        "required": [
+          "executable"
+        ]
+      },
+      "WriteStdinRequest": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "text": {
+            "type": "string",
+            "description": "UTF-8 input, mutually exclusive with binary."
+          },
+          "binary": {
+            "type": "string",
+            "format": "byte",
+            "description": "Strict base64 input, mutually exclusive with text."
+          },
+          "close": {
+            "type": "boolean",
+            "default": false,
+            "description": "Close stdin after writing optional bytes."
+          }
+        },
+        "required": [],
+        "oneOf": [
+          {
+            "required": [
+              "text"
+            ],
+            "not": {
+              "required": [
+                "binary"
+              ]
+            }
+          },
+          {
+            "required": [
+              "binary"
+            ],
+            "not": {
+              "required": [
+                "text"
+              ]
+            }
+          },
+          {
+            "required": [
+              "close"
+            ],
+            "properties": {
+              "close": {
+                "type": "boolean",
+                "enum": [
+                  true
+                ]
+              }
+            },
+            "not": {
+              "anyOf": [
+                {
+                  "required": [
+                    "text"
+                  ]
+                },
+                {
+                  "required": [
+                    "binary"
+                  ]
+                }
+              ]
+            }
+          }
+        ]
+      },
+      "StdinResult": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "bytesWritten": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          },
+          "closed": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "bytesWritten",
+          "closed"
+        ]
+      },
+      "ApiError": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "code": {
+            "type": "string",
+            "description": "Machine-readable error kind."
+          },
+          "message": {
+            "type": "string",
+            "description": "Diagnostic description without Bearer keys or stream contents."
+          },
+          "accumulatedBytes": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0,
+            "description": "Accumulated original bytes, especially on output decoding failure."
+          }
+        },
+        "required": [
+          "code",
+          "message"
+        ]
+      },
+      "ExecutionInfo": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "pid": {
+            "type": "integer",
+            "format": "int32"
+          },
+          "executable": {
+            "type": "string"
+          },
+          "args": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "cwd": {
+            "type": "string"
+          },
+          "environment": {
+            "type": "object",
+            "additionalProperties": {
+              "type": "string"
+            }
+          },
+          "durable": {
+            "type": "boolean"
+          },
+          "state": {
+            "type": "string",
+            "pattern": "^(running|exited)$"
+          },
+          "startedAt": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "endedAt": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "durationMilliseconds": {
+            "type": "number",
+            "format": "double",
+            "minimum": 0
+          },
+          "exitCode": {
+            "type": "integer",
+            "format": "int32"
+          },
+          "stdoutBytes": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          },
+          "stderrBytes": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          },
+          "captureComplete": {
+            "type": "boolean",
+            "description": "Both streams have reached final capture state; errors may still indicate incomplete output."
+          },
+          "errors": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ApiError"
+            }
+          }
+        },
+        "required": [
+          "id",
+          "pid",
+          "executable",
+          "args",
+          "cwd",
+          "environment",
+          "durable",
+          "state",
+          "startedAt",
+          "durationMilliseconds",
+          "stdoutBytes",
+          "stderrBytes",
+          "captureComplete",
+          "errors"
+        ]
+      },
+      "OutputChunk": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "offset": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          },
+          "requestedBytes": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0,
+            "description": "Null/absent means all available was requested, subject to server cap."
+          },
+          "returnedBytes": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0,
+            "description": "Actual raw bytes inline in this response; zero for a blob reference."
+          },
+          "nextOffset": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          },
+          "remainingBytes": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          },
+          "totalBytes": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          },
+          "eof": {
+            "type": "boolean"
+          },
+          "text": {
+            "type": "string",
+            "description": "Strict UTF-8 output when text representation was selected."
+          },
+          "binary": {
+            "type": "string",
+            "format": "byte",
+            "description": "Base64 output when binary representation was selected."
+          },
+          "blobId": {
+            "type": "string",
+            "description": "Opaque reference for separately reading raw bytes. No bytes consumed by this reference."
+          }
+        },
+        "required": [
+          "offset",
+          "returnedBytes",
+          "nextOffset",
+          "remainingBytes",
+          "totalBytes",
+          "eof"
+        ]
+      },
+      "OutputResponse": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "execution": {
+            "$ref": "#/components/schemas/ExecutionInfo"
+          },
+          "stdout": {
+            "$ref": "#/components/schemas/OutputChunk"
+          },
+          "stderr": {
+            "$ref": "#/components/schemas/OutputChunk"
+          }
+        },
+        "required": [
+          "execution",
+          "stdout",
+          "stderr"
+        ]
+      },
+      "SignalRequest": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "pid": {
+            "type": "integer",
+            "format": "int32",
+            "minimum": 1
+          },
+          "signal": {
+            "type": "integer",
+            "format": "int32",
+            "minimum": 0,
+            "description": "Native Unix signal number; zero performs the platform permission/existence check."
+          }
+        },
+        "required": [
+          "pid",
+          "signal"
+        ]
+      },
+      "ProcessInfo": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "pid": {
+            "type": "integer",
+            "format": "int32"
+          },
+          "ppid": {
+            "type": "integer",
+            "format": "int32"
+          },
+          "name": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "pid",
+          "ppid",
+          "name"
+        ]
+      },
+      "ServiceStatus": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "mode": {
+            "type": "string",
+            "pattern": "^(running|draining)$"
+          },
+          "operatingSystem": {
+            "type": "string"
+          },
+          "version": {
+            "type": "string"
+          },
+          "activeExecutions": {
+            "type": "integer",
+            "format": "int32",
+            "minimum": 0
+          }
+        },
+        "required": [
+          "mode",
+          "operatingSystem",
+          "version",
+          "activeExecutions"
+        ]
+      }
+    },
+    "responses": {
+      "BadRequest": {
+        "description": "Invalid JSON, range, input encoding or output UTF-8 decoding; data is retained on decoding failure.",
+        "content": {
+          "application/json": {
+            "schema": {
+              "$ref": "#/components/schemas/ApiError"
+            }
+          }
+        }
+      },
+      "Unauthorized": {
+        "description": "Missing or invalid Bearer API key.",
+        "content": {
+          "application/json": {
+            "schema": {
+              "$ref": "#/components/schemas/ApiError"
+            }
+          }
+        }
+      },
+      "NotFound": {
+        "description": "Execution or blob is absent, including an execution already consumed and deleted.",
+        "content": {
+          "application/json": {
+            "schema": {
+              "$ref": "#/components/schemas/ApiError"
+            }
+          }
+        }
+      },
+      "Conflict": {
+        "description": "Operation conflicts with execution/service state.",
+        "content": {
+          "application/json": {
+            "schema": {
+              "$ref": "#/components/schemas/ApiError"
+            }
+          }
+        }
+      },
+      "InternalServerError": {
+        "description": "Operating system, launch or storage operation failed.",
+        "content": {
+          "application/json": {
+            "schema": {
+              "$ref": "#/components/schemas/ApiError"
+            }
+          }
+        }
+      }
+    }
+  }
+}

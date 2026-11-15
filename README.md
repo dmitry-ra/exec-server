@@ -1,2 +1,1 @@
-# exec-server
-A small HTTP API server for launching and controlling local processes
+# ExecServer — HTTP API for launching and controlling local processes.
