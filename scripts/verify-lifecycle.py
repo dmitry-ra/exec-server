@@ -11,6 +11,7 @@ from pathlib import Path
 import pty
 import secrets
 import select
+import shutil
 import signal
 import socket
 import subprocess
@@ -26,6 +27,13 @@ ROOT = Path(__file__).resolve().parents[1]
 DEADLINE_SECONDS = 12
 HTTP_TIMEOUT_SECONDS = 3
 INTERRUPT_BYTE = b"\x03"
+
+
+def dotnet_command():
+    private = ROOT / ".sdk/dotnet"
+    command = str(private) if private.is_file() else shutil.which("dotnet")
+    require(command, "A .NET SDK is required for the development harness")
+    return command
 
 
 def require(condition, message):
@@ -144,8 +152,9 @@ class Service:
             return None
 
     def launch(self, fixture, mode, environment=None):
-        body = {"executable": str(ROOT / ".sdk/dotnet"),
-                "args": [str(fixture), mode], "durable": True,
+        is_assembly = fixture.suffix.lower() == ".dll"
+        body = {"executable": dotnet_command() if is_assembly else str(fixture),
+                "args": [str(fixture), mode] if is_assembly else [mode], "durable": True,
                 "closeStdin": False, "waitMilliseconds": 0}
         if environment is not None:
             body["environment"] = environment
@@ -299,11 +308,12 @@ def diagnostic_logs(work, command, fixture):
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--server-binary", type=Path)
+    parser.add_argument("--fixture", type=Path)
     options = parser.parse_args()
     require(os.name == "posix" and Path("/proc/self").exists(), "This acceptance runner requires Linux")
-    fixture = ROOT / "tests/ExecServer.Fixture/bin/Debug/net11.0/exec-server-fixture.dll"
+    fixture = options.fixture.resolve() if options.fixture else ROOT / "tests/ExecServer.Fixture/bin/Debug/net11.0/exec-server-fixture.dll"
     target = options.server_binary.resolve() if options.server_binary else ROOT / "src/ExecServer/bin/Debug/net11.0/linux-x64/exec-server.dll"
-    command = [str(target)] if options.server_binary else [str(ROOT / ".sdk/dotnet"), str(target)]
+    command = [str(target)] if options.server_binary else [dotnet_command(), str(target)]
     require(target.is_file() and fixture.is_file(), "Build the service and fixture before this acceptance runner")
     stamp = datetime.datetime.now(datetime.timezone.utc).strftime("%Y%m%dT%H%M%SZ")
     work = ROOT / ".artifacts/lifecycle" / (stamp + "-" + uuid.uuid4().hex[:8])

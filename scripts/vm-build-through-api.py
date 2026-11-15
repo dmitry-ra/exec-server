@@ -66,6 +66,8 @@ def run(name, executable, args, cwd=None, environment=None, deadline=600):
 
 status = call("GET", "/v1/status")
 (options.receipts / "status.json").write_text(json.dumps(status, indent=2) + "\n")
+run("make-source-directory", "/usr/bin/mkdir", ["-p", options.source])
+run("extract-source", "/usr/bin/tar", ["-xzf", "/home/runner/exec-server-test/source.tar.gz", "-C", options.source])
 run("apt-update", "/usr/bin/sudo", ["-n", "apt-get", "update"])
 run("install-dependencies", "/usr/bin/sudo", ["-n", "apt-get", "install", "-y", "curl", "ca-certificates", "git", "libicu78", "libssl3t64"])
 run("install-sdk", "/bin/bash", [options.source + "/scripts/install-sdk.sh", "/home/runner/exec-server-sdk"], deadline=900)

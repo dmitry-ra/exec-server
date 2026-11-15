@@ -12,4 +12,7 @@ export ExecServer__SpoolDirectory="$PWD/.artifacts/dev-spool"
 export ExecServer__MemoryThresholdBytes=1024
 export ExecServer__MaxReadBytes=65536
 export ExecServer__InlineBytes=4096
+if [[ -n "${EXECSERVER_DEV_BINARY:-}" ]]; then
+  exec "$EXECSERVER_DEV_BINARY" --urls http://127.0.0.1:18080 >> .artifacts/dev-console.jsonl 2>&1
+fi
 exec .sdk/dotnet src/ExecServer/bin/Debug/net11.0/linux-x64/exec-server.dll --urls http://127.0.0.1:18080 >> .artifacts/dev-console.jsonl 2>&1

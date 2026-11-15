@@ -20,6 +20,11 @@
 - `tunnel-linux-vm.sh` — SSH-туннель к loopback API лабораторной ВМ.
 - `vm-build-through-api.py` — установка пакетов/SDK и сборка проекта отдельными
   REST-командами, с сохранением ID, exitCode и обоих потоков в квитанциях.
+- `run-published-acceptance.py` — изолированные копии опубликованных сервиса и
+  fixture, C# HTTP-harness, фактические SHA-256 и проверка штатного выхода.
+- `prepare-windows-payload.py` — SHA-256 manifest публичных испытательных файлов.
+- `run-windows-vm-acceptance.ps1` — приёмка трёх self-contained файлов в новом
+  приватном каталоге Windows-ВМ, без изменения рабочего стола и служб владельца.
 - `verify-lifecycle.py` — изолированные проверки настоящего PTY Ctrl-C,
   отказа без ключа, exclusive-spool и ротации журналов. Поддерживает приёмку
   self-contained бинарника; подробности в `docs/lifecycle-evidence.md`.

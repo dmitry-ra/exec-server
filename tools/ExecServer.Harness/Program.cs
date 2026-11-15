@@ -14,6 +14,11 @@ for (var i = 0; i < args.Length; i++)
         throw new ArgumentException("Expected --url URL --token KEY --fixture PATH [--dotnet PATH] [--include-shutdown]");
     options.Add(args[i], args[++i]);
 }
+if (options.Remove("--token-file", out string? keyFile))
+{
+    if (options.ContainsKey("--token")) throw new ArgumentException("Use either --token or --token-file.");
+    options["--token"] = File.ReadAllText(keyFile).Trim();
+}
 foreach (var required in new[] { "--url", "--token", "--fixture" })
     if (!options.ContainsKey(required)) throw new ArgumentException($"Missing {required}");
 

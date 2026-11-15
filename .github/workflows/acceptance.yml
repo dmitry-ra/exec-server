@@ -1,0 +1,101 @@
+name: Published binary acceptance
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  published:
+    name: Published binary on ${{ matrix.os }}
+    if: github.event.repository.private == false
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest, macos-latest]
+    defaults:
+      run:
+        shell: pwsh
+    env:
+      DOTNET_CLI_TELEMETRY_OPTOUT: "1"
+      DOTNET_NOLOGO: "1"
+      DOTNET_CLI_UI_LANGUAGE: en-US
+    steps:
+      - name: Check out the exact dispatched revision
+        uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
+        timeout-minutes: 2
+        with:
+          persist-credentials: false
+      - name: Install the pinned .NET SDK
+        uses: actions/setup-dotnet@26b0ec14cb23fa6904739307f278c14f94c95bf1
+        timeout-minutes: 4
+        with:
+          dotnet-version: 11.0.100
+      - name: Restore locked dependencies
+        timeout-minutes: 3
+        run: dotnet restore ExecServer.slnx --locked-mode
+      - name: Build the solution
+        timeout-minutes: 3
+        run: dotnet build ExecServer.slnx --configuration Release --no-restore
+      - name: Verify generated contract and storage
+        timeout-minutes: 2
+        run: |
+          dotnet run --project tools/ContractGenerator --configuration Release --no-build -- api/openapi.json src/ExecServer/Contracts/Api.g.cs --check
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          dotnet run --project tests/ExecServer.Storage.Tests --configuration Release --no-build
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+      - name: Determine the native runtime identifier
+        id: native
+        timeout-minutes: 1
+        run: |
+          $information = dotnet --info
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          $match = $information | Select-String '^\s*RID:\s*(\S+)\s*$' | Select-Object -First 1
+          if (-not $match) { throw 'The SDK did not report its native RID.' }
+          $rid = $match.Matches[0].Groups[1].Value
+          $extension = if ($IsWindows) { '.exe' } else { '' }
+          Add-Content -Path $env:GITHUB_OUTPUT -Value "rid=$rid"
+          Add-Content -Path $env:GITHUB_OUTPUT -Value "extension=$extension"
+      - name: Publish the two independent single files
+        timeout-minutes: 4
+        run: |
+          dotnet publish src/ExecServer --configuration Release --runtime '${{ steps.native.outputs.rid }}' --self-contained true --no-restore -p:EnableCompressionInSingleFile=true --output .artifacts/ci/server
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          dotnet publish tests/ExecServer.Fixture --configuration Release --runtime '${{ steps.native.outputs.rid }}' --self-contained true --no-restore -p:PublishSingleFile=true -p:IncludeNativeLibrariesForSelfExtract=true -p:EnableCompressionInSingleFile=true -p:DebugType=embedded --output .artifacts/ci/fixture
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+      - name: Exercise only isolated copies of those binaries
+        timeout-minutes: 4
+        run: |
+          $dotnet = (Get-Command dotnet).Source
+          python scripts/run-published-acceptance.py --server-binary '.artifacts/ci/server/exec-server${{ steps.native.outputs.extension }}' --fixture '.artifacts/ci/fixture/exec-server-fixture${{ steps.native.outputs.extension }}' --harness tools/ExecServer.Harness/bin/Release/net11.0/exec-server-harness.dll --dotnet "$dotnet" --output-dir .artifacts/ci/acceptance
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+      - name: Verify Linux terminal lifecycle on the same binary
+        if: runner.os == 'Linux'
+        timeout-minutes: 2
+        run: python scripts/verify-lifecycle.py --server-binary .artifacts/ci/server/exec-server --fixture .artifacts/ci/fixture/exec-server-fixture
+      - name: Upload public test receipts and binaries
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        timeout-minutes: 2
+        with:
+          name: exec-server-${{ matrix.os }}-${{ steps.native.outputs.rid }}
+          retention-days: 3
+          include-hidden-files: true
+          if-no-files-found: warn
+          path: |
+            .artifacts/ci/acceptance/receipt.json
+            .artifacts/ci/acceptance/harness.stdout.jsonl
+            .artifacts/ci/acceptance/harness.stderr.log
+            .artifacts/ci/acceptance/server.stdout.log
+            .artifacts/ci/acceptance/server.stderr.log
+            .artifacts/ci/acceptance/diagnostics/server.jsonl*
+            .artifacts/ci/server/exec-server${{ steps.native.outputs.extension }}
+            .artifacts/ci/fixture/exec-server-fixture${{ steps.native.outputs.extension }}
+            .artifacts/lifecycle/*/receipt.json
