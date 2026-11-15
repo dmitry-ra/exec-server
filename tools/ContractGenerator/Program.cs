@@ -34,7 +34,7 @@ settings.CSharpGeneratorSettings.JsonLibrary = CSharpJsonLibrary.SystemTextJson;
 settings.CSharpGeneratorSettings.GenerateNullableReferenceTypes = true;
 settings.CSharpGeneratorSettings.GenerateOptionalPropertiesAsNullable = true;
 settings.CSharpGeneratorSettings.DateTimeType = "System.DateTimeOffset";
-var output = new CSharpControllerGenerator(document, settings).GenerateFile();
+var output = new CSharpControllerGenerator(document, settings).GenerateFile().ReplaceLineEndings("\n");
 if (args.Length == 3)
 {
     if (!File.Exists(args[1]) || await File.ReadAllTextAsync(args[1]) != output)
