@@ -15,6 +15,10 @@ not. Normal .NET platform requirements for OS system libraries still apply.
   than server DTOs. It emits JSON results with individual checks, durations and
   failures. A nonzero exit code indicates failure.
 - Storage checks separately cover spill, concurrency, notification and cleanup.
+- `tests/ExecServer.Processes.Tests` compiles the actual execution manager and
+  record sources. Its deterministic output-read/deletion interleaving verifies
+  an admitted reader can read both streams, later readers are refused, metadata
+  remains until cleanup finishes and output readers do not extend root draining.
 
 The harness does not print the API key, HTTP headers or launch environment. It
 starts its own children and removes only its own execution records. Publishing

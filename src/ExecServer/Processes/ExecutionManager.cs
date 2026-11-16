@@ -55,6 +55,7 @@ public sealed class ExecutionManager(ServerSettings settings, ILogger<ExecutionM
             }
             catch (Exception setupError)
             {
+                record.AddError("launch_setup", setupError.Message);
                 Exception? cleanupFailure = null;
                 try
                 {
@@ -71,15 +72,14 @@ public sealed class ExecutionManager(ServerSettings settings, ILogger<ExecutionM
                 }
                 if (cleanupFailure is not null)
                 {
-                    record.AddError("launch_setup", setupError.Message);
                     record.AddError("launch_cleanup", cleanupFailure.Message);
                     if (!published && !_records.TryAdd(record.Id, record))
                         throw new IOException("Failed launch could not retain its execution record.", cleanupFailure);
                     _ = ObserveAsync(record);
                     throw new IOException("Failed launch remains owned as execution " + record.Id + ".", cleanupFailure);
                 }
-                if (published) _records.TryRemove(record.Id, out _);
                 record.AbortAsync().GetAwaiter().GetResult();
+                if (published) _records.TryRemove(record.Id, out _);
                 throw;
             }
         }

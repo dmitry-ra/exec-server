@@ -61,6 +61,8 @@ requests remain idempotent. Deletion waits for input operations to unwind before
 closing the owned pipe endpoints. The same cleanup task serves concurrent
 deletion attempts, and metadata is removed only after resource cleanup succeeds.
 A descendant holding stdin does not extend the managed root's lifetime.
+Output and blob reads admitted before deletion finish copying their data before
+buffers are disposed. New output/blob reads after deletion begins return 404.
 
 Failed launch setup rolls back its owned root and resources. If OS termination
 or reaping fails, the record remains discoverable with `launch_setup` and

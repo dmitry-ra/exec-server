@@ -39,6 +39,7 @@ public sealed class ExecutionsController(ExecutionManager manager, ServerSetting
         CancellationToken cancellationToken = default)
     {
         var record = Record(id);
+        using var read = record.AcquireOutputRead();
         long outOffset = stdoutOffset ?? 0, errOffset = stderrOffset ?? 0;
         ValidateRead(outOffset, limit, record.Stdout.Length);
         ValidateRead(errOffset, limit, record.Stderr.Length);
@@ -115,6 +116,7 @@ public sealed class ExecutionsController(ExecutionManager manager, ServerSetting
         if (!Guid.TryParseExact(blobId, "N", out var guid)) throw new ApiFault(404, "not_found", "Blob not found.");
         var record = manager.Records.FirstOrDefault(value => value.Stdout.BlobId == guid || value.Stderr.BlobId == guid)
             ?? throw new ApiFault(404, "not_found", "Blob not found.");
+        using var read = record.AcquireOutputRead();
         bool stdout = record.Stdout.BlobId == guid;
         OutputBuffer buffer = stdout ? record.Stdout : record.Stderr;
         long start = offset ?? 0, length = buffer.Length;

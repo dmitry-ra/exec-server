@@ -1,0 +1,21 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net11.0</TargetFramework>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+    <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
+    <TreatWarningsAsErrors>true</TreatWarningsAsErrors>
+  </PropertyGroup>
+  <ItemGroup>
+    <FrameworkReference Include="Microsoft.AspNetCore.App" />
+    <Using Include="Microsoft.Extensions.Logging" />
+    <Compile Include="../../src/ExecServer/Processes/ExecutionRecord.cs" Link="ExecutionRecord.cs" />
+    <Compile Include="../../src/ExecServer/Processes/ExecutionManager.cs" Link="ExecutionManager.cs" />
+    <Compile Include="../../src/ExecServer/Processes/UnixLauncher.cs" Link="UnixLauncher.cs" />
+    <Compile Include="../../src/ExecServer/Storage/OutputBuffer.cs" Link="OutputBuffer.cs" />
+    <Compile Include="../../src/ExecServer/ServerSettings.cs" Link="ServerSettings.cs" />
+    <Compile Include="../../src/ExecServer/Contracts/Api.g.cs" Link="Api.g.cs" />
+    <Compile Include="../../src/ExecServer/ApiFault.cs" Link="ApiFault.cs" />
+  </ItemGroup>
+</Project>

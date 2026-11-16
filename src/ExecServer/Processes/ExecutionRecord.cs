@@ -16,6 +16,9 @@ public sealed class ExecutionRecord : IAsyncDisposable
     private StreamReader? _stderrReader;
     private readonly Lazy<Task> _closeInput;
     private readonly Lazy<Task> _disposal;
+    private readonly TaskCompletionSource _outputReadersDrained = new(TaskCreationOptions.RunContinuationsAsynchronously);
+    private int _outputReaders;
+    private bool _outputClosing;
     private readonly List<ApiError> _errors = [];
     private readonly Stopwatch _elapsed = Stopwatch.StartNew();
     private volatile bool _inputClosed;
@@ -140,6 +143,41 @@ public sealed class ExecutionRecord : IAsyncDisposable
         lock (_sync) _errors.Add(new ApiError { Code = code, Message = message, AccumulatedBytes = accumulatedBytes });
     }
 
+    public IDisposable AcquireOutputRead()
+    {
+        lock (_sync)
+        {
+            if (_outputClosing) throw new ApiFault(404, "not_found", "Execution output is being deleted.");
+            _outputReaders++;
+            return new OutputReadLease(this);
+        }
+    }
+
+    private void ReleaseOutputRead()
+    {
+        lock (_sync)
+        {
+            _outputReaders--;
+            if (_outputClosing && _outputReaders == 0) _outputReadersDrained.TrySetResult();
+        }
+    }
+
+    private Task StopOutputAdmission()
+    {
+        lock (_sync)
+        {
+            _outputClosing = true;
+            if (_outputReaders == 0) _outputReadersDrained.TrySetResult();
+            return _outputReadersDrained.Task;
+        }
+    }
+
+    private sealed class OutputReadLease(ExecutionRecord owner) : IDisposable
+    {
+        private ExecutionRecord? _owner = owner;
+        public void Dispose() => Interlocked.Exchange(ref _owner, null)?.ReleaseOutputRead();
+    }
+
     public static byte[] InputBytes(string? text, byte[]? binary)
     {
         if (text is not null && binary is not null)
@@ -223,6 +261,7 @@ public sealed class ExecutionRecord : IAsyncDisposable
     private async Task DisposeCoreAsync()
     {
         // Caller permits deletion only once the root and both capture pumps have ended.
+        await StopOutputAdmission().ConfigureAwait(false);
         using var ownedProcess = Process;
         using var captureLifetime = _captureLifetime;
         using var stdoutReader = _stdoutReader;
