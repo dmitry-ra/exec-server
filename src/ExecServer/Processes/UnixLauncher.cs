@@ -7,7 +7,6 @@ namespace ExecServer.Processes;
 /// <summary>Replaces a freshly spawned copy with the target, in its own Unix session.</summary>
 public static partial class UnixLauncher
 {
-    private const int SetDescriptorFlagsCommand = 2;
     private const int CloseOnExecFlag = 1;
     private const int BadFileDescriptorError = 9;
     private const int LaunchSetupFailureExitCode = 126;
@@ -16,8 +15,10 @@ public static partial class UnixLauncher
     private static partial int SetSession();
     [LibraryImport("libc", EntryPoint = "execvp", StringMarshalling = StringMarshalling.Utf8, SetLastError = true)]
     private static partial int Exec(string file, IntPtr arguments);
-    [LibraryImport("libc", EntryPoint = "fcntl", SetLastError = true)]
-    private static partial int SetDescriptorFlags(int descriptor, int command, int flags);
+    [LibraryImport("libSystem.Native", EntryPoint = "SystemNative_FcntlSetFD", SetLastError = true)]
+    private static partial int SetDescriptorFlags(IntPtr descriptor, int flags);
+    [LibraryImport("libSystem.Native", EntryPoint = "SystemNative_FcntlGetFD", SetLastError = true)]
+    private static partial int GetDescriptorFlags(IntPtr descriptor);
 
     public static ProcessStartInfo StartInfo(string executable, IEnumerable<string> arguments)
     {
@@ -57,12 +58,26 @@ public static partial class UnixLauncher
             foreach (string path in Directory.GetFileSystemEntries(descriptorDirectory))
             {
                 if (!int.TryParse(Path.GetFileName(path), out int descriptor) || descriptor <= 2) continue;
-                if (SetDescriptorFlags(descriptor, SetDescriptorFlagsCommand, CloseOnExecFlag) < 0)
+                // .NET's fixed-signature shim also handles Darwin ARM64 varargs ABI.
+                if (SetDescriptorFlags(new IntPtr(descriptor), CloseOnExecFlag) < 0)
                 {
                     int error = Marshal.GetLastPInvokeError();
                     // The enumeration's descriptor may already be closed after the snapshot.
                     if (error == BadFileDescriptorError) continue;
                     Console.Error.WriteLine(new Win32Exception(error).Message);
+                    return LaunchSetupFailureExitCode;
+                }
+                int actualFlags = GetDescriptorFlags(new IntPtr(descriptor));
+                if (actualFlags < 0)
+                {
+                    int error = Marshal.GetLastPInvokeError();
+                    if (error == BadFileDescriptorError) continue;
+                    Console.Error.WriteLine(new Win32Exception(error).Message);
+                    return LaunchSetupFailureExitCode;
+                }
+                if ((actualFlags & CloseOnExecFlag) == 0)
+                {
+                    Console.Error.WriteLine("Unable to verify close-on-exec on an inherited descriptor.");
                     return LaunchSetupFailureExitCode;
                 }
             }
