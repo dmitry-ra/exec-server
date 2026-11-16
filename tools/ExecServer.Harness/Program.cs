@@ -40,6 +40,7 @@ sealed class Suite(HttpClient client, string fixture, string? dotnet)
     {
         await Case("authentication_rejects_before_child_start", AuthenticationAsync);
         await Case("invalid_requests_rejected_without_child_start", ValidationAsync);
+        await Case("os_launch_failure_returns_server_error_without_record", LaunchFailureAsync);
         await Case("child_does_not_inherit_service_api_key", ChildEnvironmentAsync);
         await Case("separate_streams_and_exit_metadata", SeparateStreamsAsync);
         await Case("initial_and_later_stdin_with_eof", StdinAsync);
@@ -208,6 +209,19 @@ sealed class Suite(HttpClient client, string fixture, string? dotnet)
         await WaitAsync(id);
         var data = await OutputAsync(id);
         Check(Encoding.UTF8.GetString(await ReadChunkAsync(data["stdout"]!)) == "absent", "invalid launch started a child");
+    }
+
+    private async Task LaunchFailureAsync()
+    {
+        using var before = await client.GetAsync("v1/executions");
+        var previous = (await JsonAsync(before)).AsArray().Select(record => Text(record!, "id")).Order().ToArray();
+        var body = Launch("emit");
+        body["cwd"] = Path.Combine(Path.GetTempPath(), "exec-server-missing-" + Guid.NewGuid().ToString("N"));
+        using var response = await client.PostAsJsonAsync("v1/executions", body);
+        Check(response.StatusCode == HttpStatusCode.InternalServerError, "OS launch failure was classified as a client error");
+        using var after = await client.GetAsync("v1/executions");
+        var current = (await JsonAsync(after)).AsArray().Select(record => Text(record!, "id")).Order().ToArray();
+        Check(previous.SequenceEqual(current), "failed launch published an execution record");
     }
 
     private async Task ChildEnvironmentAsync()

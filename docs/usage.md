@@ -74,6 +74,9 @@ are rejected, existing I/O remains available and the service waits for its
 directly launched processes. It does not automatically kill whole process trees.
 SIGKILL or a crash does not guarantee descendant termination. Each child controls
 its own descendants and inherited pipes.
+Output capture does not extend service lifetime after the last managed root
+exits. Read required output before requesting shutdown; a descendant holding an
+inherited output pipe does not make draining wait for that descendant.
 
 Configuration environment variables all use the `ExecServer__` prefix:
 `MemoryThresholdBytes`, `MaxReadBytes`, `InlineBytes`, `DefaultWaitMilliseconds`,

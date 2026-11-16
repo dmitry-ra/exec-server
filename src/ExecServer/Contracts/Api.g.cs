@@ -151,7 +151,7 @@ namespace ExecServer.Contracts
         /// Enter draining mode and wait for managed root processes
         /// </summary>
         /// <remarks>
-        /// Rejects new launches, keeps existing I/O, metadata, diagnostics, signals and status available. Waits for directly managed roots only, then exits. Does not kill roots or descendants and has no automatic forced deadline. Ctrl-C requests the same transition.
+        /// Rejects new launches, keeps existing I/O, metadata, diagnostics, signals and status available. Waits for directly managed roots only, then exits. Does not kill roots or descendants and has no automatic forced deadline. Output capture does not extend service lifetime after the last root exits, including when descendants retain inherited pipes. Consume required output before requesting shutdown. Ctrl-C requests the same transition.
         /// </remarks>
         /// <returns>Draining requested; existing execution operations remain available.</returns>
         [Microsoft.AspNetCore.Mvc.HttpPost, Microsoft.AspNetCore.Mvc.Route("v1/shutdown")]

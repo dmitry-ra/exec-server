@@ -7,6 +7,7 @@ namespace ExecServer.Processes;
 
 public sealed class ExecutionManager(ServerSettings settings, ILogger<ExecutionManager> logger)
 {
+    private const int FailedLaunchExitTimeoutMilliseconds = 5000;
     private readonly object _gate = new();
     private readonly ConcurrentDictionary<string, ExecutionRecord> _records = new();
     private bool _draining;
@@ -37,11 +38,16 @@ public sealed class ExecutionManager(ServerSettings settings, ILogger<ExecutionM
             var process = new Process { StartInfo = start };
             var stdout = new OutputBuffer(settings.SpoolDirectory, settings.MemoryThresholdBytes);
             var stderr = new OutputBuffer(settings.SpoolDirectory, settings.MemoryThresholdBytes);
+            bool started = false;
+            bool published = false;
+            ExecutionRecord? record = null;
             try
             {
-                if (!process.Start()) throw new IOException("The operating system refused process creation.");
-                var record = new ExecutionRecord(process, request, stdout, stderr);
+                started = process.Start();
+                if (!started) throw new IOException("The operating system refused process creation.");
+                record = new ExecutionRecord(process, request, stdout, stderr);
                 if (!_records.TryAdd(record.Id, record)) throw new InvalidOperationException("Execution ID collision.");
+                published = true;
                 logger.LogInformation("Process started {ExecutionId} {Pid} {Executable} {Arguments} {Cwd} {Environment}",
                     record.Id, record.Pid, request.Executable, request.Args, request.Cwd, request.Environment);
                 _ = ObserveAsync(record);
@@ -49,9 +55,23 @@ public sealed class ExecutionManager(ServerSettings settings, ILogger<ExecutionM
             }
             catch
             {
-                process.Dispose();
-                stdout.DisposeAsync().AsTask().GetAwaiter().GetResult();
-                stderr.DisposeAsync().AsTask().GetAwaiter().GetResult();
+                if (published) _records.TryRemove(record!.Id, out _);
+                try
+                {
+                    if (started)
+                    {
+                        if (!process.HasExited) process.Kill();
+                        if (!process.WaitForExit(FailedLaunchExitTimeoutMilliseconds))
+                            throw new IOException("Started process did not exit during failed-launch cleanup.");
+                        record?.Completion.GetAwaiter().GetResult();
+                    }
+                }
+                finally
+                {
+                    process.Dispose();
+                    stdout.DisposeAsync().AsTask().GetAwaiter().GetResult();
+                    stderr.DisposeAsync().AsTask().GetAwaiter().GetResult();
+                }
                 throw;
             }
         }

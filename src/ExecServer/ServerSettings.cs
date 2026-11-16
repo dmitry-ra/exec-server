@@ -16,6 +16,8 @@ public sealed class ServerSettings
 
     public void Validate()
     {
+        ArgumentException.ThrowIfNullOrWhiteSpace(SpoolDirectory);
+        ArgumentException.ThrowIfNullOrWhiteSpace(LogDirectory);
         if (MemoryThresholdBytes < 0 || MaxReadBytes <= 0 || InlineBytes < 0 || InlineBytes > MaxReadBytes
             || DefaultWaitMilliseconds < 0 || MaxWaitMilliseconds < DefaultWaitMilliseconds
             || LogFileBytes <= 0 || LogFileCount < 1)

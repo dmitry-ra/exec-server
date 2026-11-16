@@ -65,7 +65,12 @@ try
         {
             if (context.Response.HasStarted) throw;
             var fault = error as ApiFault;
-            context.Response.StatusCode = fault?.Status ?? (error is InvalidOperationException ? 409 : 400);
+            context.Response.StatusCode = fault?.Status ?? (error switch
+            {
+                InvalidOperationException => 409,
+                ArgumentException or FormatException => 400,
+                _ => 500
+            });
             await context.Response.WriteAsJsonAsync(new ApiError
             {
                 Code = fault?.Code ?? "operation_failed",

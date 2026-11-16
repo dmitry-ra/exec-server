@@ -64,6 +64,32 @@ def reject_broken_links(server, environment, private, public_log, output):
     return checks
 
 
+def reject_blank_directories(server, environment, private, public_log, output):
+    checks = {}
+    for setting in ("SpoolDirectory", "LogDirectory"):
+        for label, value in (("empty", ""), ("whitespace", "   ")):
+            name = setting + "-" + label
+            case = private / name
+            case.mkdir()
+            sentinel = case / (uuid.uuid4().hex + ".blob")
+            sentinel.write_bytes(b"must survive rejected startup")
+            probe_environment = dict(environment)
+            probe_environment.update({"ExecServer__SpoolDirectory": str(case / "spool"),
+                                      "ExecServer__LogDirectory": str(case / "logs"),
+                                      "ExecServer__" + setting: value})
+            result = subprocess.run([str(server), "--urls", "http://127.0.0.1:" + str(free_port())],
+                                    cwd=case, env=probe_environment, stdin=subprocess.DEVNULL,
+                                    stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                                    timeout=START_TIMEOUT_SECONDS)
+            public_log(result.stdout, output / (name + ".stdout.log"))
+            public_log(result.stderr, output / (name + ".stderr.log"))
+            if result.returncode == 0 or sentinel.read_bytes() != b"must survive rejected startup" or (case / ".lock").exists():
+                raise RuntimeError("Blank directory rejection failed: " + name)
+            checks[name] = {"rejected": True, "working_directory_blob_preserved": True,
+                            "server_exit_code": result.returncode}
+    return checks
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--server-binary", type=Path, required=True)
@@ -150,6 +176,8 @@ def main():
         server_stderr = private / "server.stderr"
         try:
             receipt["broken_symlink_checks"] = reject_broken_links(
+                server, environment, private, public_log, output)
+            receipt["blank_directory_checks"] = reject_blank_directories(
                 server, environment, private, public_log, output)
             with server_stdout.open("wb") as stdout, server_stderr.open("wb") as stderr:
                 process = subprocess.Popen([str(server), "--urls", base], cwd=server_dir,
