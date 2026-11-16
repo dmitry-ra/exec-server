@@ -252,15 +252,17 @@ sealed class Suite(HttpClient client, string fixture, string? dotnet)
         var close = client.PostAsync($"v1/executions/{id}/close-stdin", null, deadline.Token);
         await Task.Delay(PendingInputProbeMilliseconds, deadline.Token);
         Check(!close.IsCompleted, "close did not queue behind the blocked write");
-        await WaitAsync(id);
-        using var deleted = await client.DeleteAsync($"v1/executions/{id}", deadline.Token);
-        Check(deleted.StatusCode == HttpStatusCode.NoContent, "deletion did not quiesce stdin");
-        _retained.Remove(id);
         using var written = await write;
         using var closed = await close;
         Check(written.StatusCode == HttpStatusCode.Conflict, "later write did not end with a closed-input conflict");
         Check(closed.IsSuccessStatusCode && (await JsonAsync(closed))["closed"]?.GetValue<bool>() == true,
             "queued close did not settle idempotently");
+        // A descendant may retain other inherited handles on Windows. Its capture
+        // lifetime is independent of the input-quiescence deadline checked above.
+        await WaitAsync(id);
+        using var deleted = await client.DeleteAsync($"v1/executions/{id}");
+        Check(deleted.StatusCode == HttpStatusCode.NoContent, "settled execution deletion failed");
+        _retained.Remove(id);
     }
 
     private async Task ChildEnvironmentAsync()

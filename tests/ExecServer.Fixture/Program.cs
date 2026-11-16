@@ -6,8 +6,8 @@ using System.Text;
 // Deterministic child processes for the HTTP harness. No shell or OS utilities.
 var mode = args.Length == 0 ? "emit" : args[0];
 var count = args.Length > 1 && int.TryParse(args[1], CultureInfo.InvariantCulture, out var parsed) ? parsed : 500;
-const int InheritedInputHoldMilliseconds = 6000;
-const int RootExitDelayMilliseconds = 2000;
+const int inheritedInputHoldMilliseconds = 6000;
+const int rootExitDelayMilliseconds = 2000;
 switch (mode)
 {
     case "retain-inherited-stdin":
@@ -20,12 +20,12 @@ switch (mode)
         if (Path.GetFileNameWithoutExtension(self).Equals("dotnet", StringComparison.OrdinalIgnoreCase))
             start.ArgumentList.Add(Path.GetFullPath(Environment.GetCommandLineArgs()[0]));
         start.ArgumentList.Add("sleep");
-        start.ArgumentList.Add(InheritedInputHoldMilliseconds.ToString(CultureInfo.InvariantCulture));
-        using (var child = Process.Start(start) ?? throw new IOException("Fixture descendant did not start."))
+        start.ArgumentList.Add(inheritedInputHoldMilliseconds.ToString(CultureInfo.InvariantCulture));
+        using (Process.Start(start) ?? throw new IOException("Fixture descendant did not start."))
         {
             await Console.Out.WriteAsync("ready\n");
             await Console.Out.FlushAsync();
-            await Task.Delay(RootExitDelayMilliseconds);
+            await Task.Delay(rootExitDelayMilliseconds);
         }
         break;
     case "emit":
