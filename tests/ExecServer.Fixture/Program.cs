@@ -1,3 +1,4 @@
+using System.Diagnostics;
 using System.Globalization;
 using System.Runtime.InteropServices;
 using System.Text;
@@ -5,8 +6,28 @@ using System.Text;
 // Deterministic child processes for the HTTP harness. No shell or OS utilities.
 var mode = args.Length == 0 ? "emit" : args[0];
 var count = args.Length > 1 && int.TryParse(args[1], CultureInfo.InvariantCulture, out var parsed) ? parsed : 500;
+const int InheritedInputHoldMilliseconds = 6000;
+const int RootExitDelayMilliseconds = 2000;
 switch (mode)
 {
+    case "retain-inherited-stdin":
+        string self = Environment.ProcessPath ?? throw new InvalidOperationException("Fixture executable is unknown.");
+        var start = new ProcessStartInfo(self)
+        {
+            UseShellExecute = false, CreateNoWindow = true,
+            RedirectStandardOutput = true, RedirectStandardError = true
+        };
+        if (Path.GetFileNameWithoutExtension(self).Equals("dotnet", StringComparison.OrdinalIgnoreCase))
+            start.ArgumentList.Add(Path.GetFullPath(Environment.GetCommandLineArgs()[0]));
+        start.ArgumentList.Add("sleep");
+        start.ArgumentList.Add(InheritedInputHoldMilliseconds.ToString(CultureInfo.InvariantCulture));
+        using (var child = Process.Start(start) ?? throw new IOException("Fixture descendant did not start."))
+        {
+            await Console.Out.WriteAsync("ready\n");
+            await Console.Out.FlushAsync();
+            await Task.Delay(RootExitDelayMilliseconds);
+        }
+        break;
     case "emit":
         await Console.Out.WriteAsync("OUT\n");
         await Console.Error.WriteAsync("ERR\n");

@@ -32,6 +32,9 @@ return suite.Failed == 0 ? 0 : 1;
 
 sealed class Suite(HttpClient client, string fixture, string? dotnet)
 {
+    private const int BlockedInputBytes = 1_048_576;
+    private const int PendingInputProbeMilliseconds = 100;
+    private const int InputQuiescenceTimeoutSeconds = 5;
     private readonly List<object> _results = [];
     private readonly HashSet<string> _retained = [];
     public int Failed { get; private set; }
@@ -41,6 +44,7 @@ sealed class Suite(HttpClient client, string fixture, string? dotnet)
         await Case("authentication_rejects_before_child_start", AuthenticationAsync);
         await Case("invalid_requests_rejected_without_child_start", ValidationAsync);
         await Case("os_launch_failure_returns_server_error_without_record", LaunchFailureAsync);
+        await Case("root_exit_settles_later_stdin_and_queued_close", InputLifetimeAsync);
         await Case("child_does_not_inherit_service_api_key", ChildEnvironmentAsync);
         await Case("separate_streams_and_exit_metadata", SeparateStreamsAsync);
         await Case("initial_and_later_stdin_with_eof", StdinAsync);
@@ -229,6 +233,34 @@ sealed class Suite(HttpClient client, string fixture, string? dotnet)
         using var after = await client.GetAsync("v1/executions");
         var current = (await JsonAsync(after)).AsArray().Select(record => Text(record!, "id")).Order().ToArray();
         Check(previous.SequenceEqual(current), "failed launch published an execution record");
+    }
+
+    private async Task InputLifetimeAsync()
+    {
+        var id = Text(await StartAsync("retain-inherited-stdin"), "id");
+        var ready = Stopwatch.StartNew();
+        while (true)
+        {
+            var output = await OutputAsync(id, "?waitMilliseconds=100");
+            if (Encoding.UTF8.GetString(await ReadChunkAsync(output["stdout"]!)) == "ready\n") break;
+            Check(ready.Elapsed < TimeSpan.FromSeconds(InputQuiescenceTimeoutSeconds), "stdin-holder fixture did not become ready");
+        }
+        using var deadline = new CancellationTokenSource(TimeSpan.FromSeconds(InputQuiescenceTimeoutSeconds));
+        var write = client.PostAsJsonAsync($"v1/executions/{id}/stdin", new { text = new string('x', BlockedInputBytes) }, deadline.Token);
+        await Task.Delay(PendingInputProbeMilliseconds, deadline.Token);
+        Check(!write.IsCompleted, "inherited pipe did not block the later write");
+        var close = client.PostAsync($"v1/executions/{id}/close-stdin", null, deadline.Token);
+        await Task.Delay(PendingInputProbeMilliseconds, deadline.Token);
+        Check(!close.IsCompleted, "close did not queue behind the blocked write");
+        await WaitAsync(id);
+        using var deleted = await client.DeleteAsync($"v1/executions/{id}", deadline.Token);
+        Check(deleted.StatusCode == HttpStatusCode.NoContent, "deletion did not quiesce stdin");
+        _retained.Remove(id);
+        using var written = await write;
+        using var closed = await close;
+        Check(written.StatusCode == HttpStatusCode.Conflict, "later write did not end with a closed-input conflict");
+        Check(closed.IsSuccessStatusCode && (await JsonAsync(closed))["closed"]?.GetValue<bool>() == true,
+            "queued close did not settle idempotently");
     }
 
     private async Task ChildEnvironmentAsync()
