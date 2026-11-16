@@ -9,16 +9,22 @@ public sealed class ExecutionRecord : IAsyncDisposable
 {
     private readonly object _sync = new();
     private readonly SemaphoreSlim _inputGate = new(1, 1);
-    private readonly CancellationTokenSource _initialInputCancellation = new();
+    private readonly CancellationTokenSource _inputLifetime = new();
+    private readonly CancellationTokenSource _captureLifetime = new();
+    private StreamWriter? _stdin;
+    private StreamReader? _stdoutReader;
+    private StreamReader? _stderrReader;
+    private readonly Lazy<Task> _closeInput;
+    private readonly Lazy<Task> _disposal;
     private readonly List<ApiError> _errors = [];
     private readonly Stopwatch _elapsed = Stopwatch.StartNew();
-    private bool _inputClosed;
+    private volatile bool _inputClosed;
     private DateTimeOffset? _endedAt;
     private int? _exitCode;
     private bool _captureComplete;
     private long _stdoutConsumedEnd = -1;
     private long _stderrConsumedEnd = -1;
-    private readonly Task _initialInput;
+    private Task _initialInput = Task.CompletedTask;
 
     public string Id { get; } = Guid.NewGuid().ToString("N");
     public Process Process { get; }
@@ -26,24 +32,36 @@ public sealed class ExecutionRecord : IAsyncDisposable
     public DateTimeOffset StartedAt { get; } = DateTimeOffset.UtcNow;
     public OutputBuffer Stdout { get; }
     public OutputBuffer Stderr { get; }
-    public Task Completion { get; }
-    public Task CaptureCompletion { get; }
-    public int Pid { get; }
+    public Task Completion { get; private set; } = Task.CompletedTask;
+    public Task CaptureCompletion { get; private set; } = Task.CompletedTask;
+    public int Pid { get; private set; }
     public bool HasExited { get { lock (_sync) return _endedAt.HasValue; } }
 
     public ExecutionRecord(Process process, StartExecutionRequest request, OutputBuffer stdout, OutputBuffer stderr)
     {
         Process = process;
-        Pid = process.Id;
         Request = request;
         Stdout = stdout;
         Stderr = stderr;
-        Task stdoutPump = PumpAsync(process.StandardOutput.BaseStream, Stdout, "stdout");
-        Task stderrPump = PumpAsync(process.StandardError.BaseStream, Stderr, "stderr");
-        Completion = ObserveExitAsync();
-        CaptureCompletion = ObserveCaptureAsync(stdoutPump, stderrPump);
-        // Initiate before publishing this record so later writes cannot overtake initial input.
-        _initialInput = WriteInitialInputAsync();
+        _closeInput = new Lazy<Task>(CloseInputCoreAsync);
+        _disposal = new Lazy<Task>(DisposeCoreAsync);
+    }
+
+    internal void AttachStartedProcess()
+    {
+        Pid = Process.Id;
+        try
+        {
+            _stdin = Process.StandardInput;
+            _stdoutReader = Process.StandardOutput;
+            _stderrReader = Process.StandardError;
+            Task stdoutPump = PumpAsync(_stdoutReader.BaseStream, Stdout, "stdout");
+            Task stderrPump = PumpAsync(_stderrReader.BaseStream, Stderr, "stderr");
+            CaptureCompletion = ObserveCaptureAsync(stdoutPump, stderrPump);
+            // Initiate before publishing so later writes cannot overtake initial input.
+            _initialInput = WriteInitialInputAsync();
+        }
+        finally { Completion = ObserveExitAsync(); }
     }
 
     public ExecutionInfo Snapshot()
@@ -68,9 +86,10 @@ public sealed class ExecutionRecord : IAsyncDisposable
         {
             byte[] buffer = new byte[32_768];
             int count;
-            while ((count = await stream.ReadAsync(buffer).ConfigureAwait(false)) != 0)
+            while ((count = await stream.ReadAsync(buffer, _captureLifetime.Token).ConfigureAwait(false)) != 0)
                 await destination.AppendAsync(buffer.AsMemory(0, count)).ConfigureAwait(false);
         }
+        catch (OperationCanceledException) when (_captureLifetime.IsCancellationRequested) { }
         catch (Exception error) when (error is IOException or ObjectDisposedException or UnauthorizedAccessException)
         {
             AddError("capture_" + name, error.Message, destination.Length);
@@ -83,11 +102,31 @@ public sealed class ExecutionRecord : IAsyncDisposable
         await Process.WaitForExitAsync().ConfigureAwait(false);
         lock (_sync)
         {
+            _inputClosed = true;
             _exitCode = Process.ExitCode;
             _endedAt = DateTimeOffset.UtcNow;
             _elapsed.Stop();
         }
-        await _initialInputCancellation.CancelAsync().ConfigureAwait(false);
+        _ = CloseInputAfterExitAsync();
+    }
+
+    private async Task CloseInputAfterExitAsync()
+    {
+        try { await _closeInput.Value.ConfigureAwait(false); }
+        catch (IOException error) { AddError("stdin_close", error.Message); }
+    }
+
+    private async Task CloseInputCoreAsync()
+    {
+        _inputClosed = true;
+        await _inputLifetime.CancelAsync().ConfigureAwait(false);
+        await _inputGate.WaitAsync().ConfigureAwait(false);
+        try { _stdin?.Dispose(); }
+        finally
+        {
+            _inputLifetime.Dispose();
+            _inputGate.Release();
+        }
     }
 
     private async Task ObserveCaptureAsync(Task stdoutPump, Task stderrPump)
@@ -113,9 +152,8 @@ public sealed class ExecutionRecord : IAsyncDisposable
         try
         {
             await WriteInputAsync(InputBytes(Request.Stdin?.Text, Request.Stdin?.Binary), Request.CloseStdin ?? false,
-                _initialInputCancellation.Token).ConfigureAwait(false);
+                CancellationToken.None).ConfigureAwait(false);
         }
-        catch (OperationCanceledException) when (_initialInputCancellation.IsCancellationRequested) { }
         catch (Exception error) when (error is IOException or ObjectDisposedException or InvalidOperationException)
         {
             AddError("stdin", error.Message);
@@ -124,27 +162,36 @@ public sealed class ExecutionRecord : IAsyncDisposable
 
     public async Task<long> WriteInputAsync(byte[] data, bool close, CancellationToken cancellationToken)
     {
+        if (_inputClosed) return ClosedInputResult(data, close);
         await _inputGate.WaitAsync(cancellationToken).ConfigureAwait(false);
         try
         {
-            if (_inputClosed)
-            {
-                if (close && data.Length == 0) return 0;
-                throw new InvalidOperationException("stdin is already closed.");
-            }
+            if (_inputClosed) return ClosedInputResult(data, close);
+            if (_stdin is null) throw new InvalidOperationException("stdin is unavailable after failed launch setup.");
+            using var write = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken, _inputLifetime.Token);
             if (data.Length > 0)
             {
-                await Process.StandardInput.BaseStream.WriteAsync(data, cancellationToken).ConfigureAwait(false);
-                await Process.StandardInput.BaseStream.FlushAsync(cancellationToken).ConfigureAwait(false);
+                await _stdin.BaseStream.WriteAsync(data, write.Token).ConfigureAwait(false);
+                await _stdin.BaseStream.FlushAsync(write.Token).ConfigureAwait(false);
             }
             if (close)
             {
-                Process.StandardInput.Close();
+                _stdin.Close();
                 _inputClosed = true;
             }
             return data.LongLength;
         }
+        catch (OperationCanceledException) when (_inputClosed)
+        {
+            throw new InvalidOperationException("stdin closed because its managed root exited.");
+        }
         finally { _inputGate.Release(); }
+    }
+
+    private static long ClosedInputResult(byte[] data, bool close)
+    {
+        if (close && data.Length == 0) return 0;
+        throw new InvalidOperationException("stdin is already closed.");
     }
 
     public bool InputClosed { get { return _inputClosed; } }
@@ -164,15 +211,28 @@ public sealed class ExecutionRecord : IAsyncDisposable
             && _stdoutConsumedEnd == Stdout.Length && _stderrConsumedEnd == Stderr.Length; }
     }
 
-    public async ValueTask DisposeAsync()
+    internal async Task AbortAsync()
+    {
+        await _captureLifetime.CancelAsync().ConfigureAwait(false);
+        await Completion.ConfigureAwait(false);
+        await DisposeAsync().ConfigureAwait(false);
+    }
+
+    public ValueTask DisposeAsync() => new(_disposal.Value);
+
+    private async Task DisposeCoreAsync()
     {
         // Caller permits deletion only once the root and both capture pumps have ended.
+        using var ownedProcess = Process;
+        using var captureLifetime = _captureLifetime;
+        using var stdoutReader = _stdoutReader;
+        using var stderrReader = _stderrReader;
+        await using var stdout = Stdout.ConfigureAwait(false);
+        await using var stderr = Stderr.ConfigureAwait(false);
+        await _closeInput.Value.ConfigureAwait(false);
         await CaptureCompletion.ConfigureAwait(false);
         await _initialInput.ConfigureAwait(false);
-        await Stdout.DisposeAsync().ConfigureAwait(false);
-        await Stderr.DisposeAsync().ConfigureAwait(false);
-        Process.Dispose();
-        _inputGate.Dispose();
-        _initialInputCancellation.Dispose();
+        // Stale record references can still enter WriteInputAsync after deletion.
+        // This managed-only gate has no wait handle and remains safe for those callers.
     }
 }

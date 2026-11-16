@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """Bounded Linux lifecycle acceptance against only subprocesses started here."""
 import argparse
+import concurrent.futures
 import contextlib
 import datetime
 import fcntl
@@ -28,6 +29,11 @@ ROOT = Path(__file__).resolve().parents[1]
 DEADLINE_SECONDS = 12
 HTTP_TIMEOUT_SECONDS = 3
 INTERRUPT_BYTE = b"\x03"
+BLOCKED_INPUT_BYTES = 1024 * 1024
+OWNED_DESCENDANT_SECONDS = 8
+PENDING_WRITE_PROBE_SECONDS = .1
+PIPE_REUSE_EXECUTIONS = 8
+FD_BACKGROUND_ALLOWANCE = 2
 
 
 def dotnet_command():
@@ -306,22 +312,31 @@ def diagnostic_logs(work, command, fixture):
         service.stop()
 
 
-def exited_root_with_blocked_initial_input(work, command, fixture):
+def exited_root_with_blocked_input(work, command, fixture, initial):
     service = Service(work, command)
     try:
         wait_until(service.ready)
         child_pid_file = work / "owned-descendant.pid"
         child_script = work / "hold-input.py"
+        release = work / "exit-root"
         child_script.write_text(
             "import os, pathlib, sys, time\n"
-            "if os.fork(): os._exit(0)\n"
+            "if os.fork():\n"
+            " deadline = time.monotonic() + " + str(OWNED_DESCENDANT_SECONDS) + "\n"
+            " while sys.argv[2] != '-' and not pathlib.Path(sys.argv[2]).exists() and time.monotonic() < deadline: time.sleep(.01)\n"
+            " os._exit(0)\n"
             "pathlib.Path(sys.argv[1]).write_text(str(os.getpid()))\n"
             "os.close(1); os.close(2)\n"
-            "time.sleep(8)\n")
-        code, record = service.request("/executions", {
-            "executable": sys.executable, "args": [str(child_script), str(child_pid_file)],
-            "stdin": {"text": "x" * (1024 * 1024)}, "durable": True, "waitMilliseconds": 0})
+            "time.sleep(" + str(OWNED_DESCENDANT_SECONDS) + ")\n")
+        body = {"executable": sys.executable,
+                "args": [str(child_script), str(child_pid_file), "-" if initial else str(release)],
+                "durable": True, "waitMilliseconds": 0}
+        if initial:
+            body["stdin"] = {"text": "x" * BLOCKED_INPUT_BYTES}
+        code, record = service.request("/executions", body)
         require(code in (201, 202), "Blocked-input fixture launch failed")
+        if not initial:
+            service.children.append((record["id"], os.pidfd_open(record["pid"])))
         wait_until(lambda: child_pid_file.exists() and child_pid_file.read_text())
         descendant = os.pidfd_open(int(child_pid_file.read_text()))
         service.children.append((record["id"], descendant))
@@ -330,13 +345,54 @@ def exited_root_with_blocked_initial_input(work, command, fixture):
             status, current = service.request("/executions/" + record["id"])
             return current if status == 200 and current["state"] == "exited" and current["captureComplete"] else None
 
-        wait_until(finished)
-        started = time.monotonic()
-        code, _ = service.request("/executions/" + record["id"], method="DELETE")
-        require(code == 204, "Exited root could not be deleted while descendant holds stdin")
-        require(not select.select([descendant], [], [], 0)[0], "Descendant exited before deletion was tested")
-        return {"rootExited": True, "captureComplete": True, "descendantStillAlive": True,
-                "deleteMilliseconds": round((time.monotonic() - started) * 1000)}
+        with concurrent.futures.ThreadPoolExecutor(max_workers=2) as pool:
+            writer = closer = None
+            if not initial:
+                writer = pool.submit(service.request, "/executions/" + record["id"] + "/stdin",
+                                     {"text": "x" * BLOCKED_INPUT_BYTES})
+                time.sleep(PENDING_WRITE_PROBE_SECONDS)
+                require(not writer.done(), "Later writer did not block in inherited pipe")
+                closer = pool.submit(service.request, "/executions/" + record["id"] + "/close-stdin", None, "POST")
+                time.sleep(PENDING_WRITE_PROBE_SECONDS)
+                require(not closer.done(), "Close did not queue behind the blocked writer")
+                release.write_text("exit")
+            wait_until(finished)
+            started = time.monotonic()
+            code, _ = service.request("/executions/" + record["id"], method="DELETE")
+            require(code == 204, "Exited root could not be deleted while descendant holds stdin")
+            if writer:
+                require(writer.result(timeout=HTTP_TIMEOUT_SECONDS)[0] == 409, "Later write was not refused on root exit")
+                close_code, closed = closer.result(timeout=HTTP_TIMEOUT_SECONDS)
+                require(close_code == 200 and closed["closed"], "Queued close did not settle idempotently")
+            require(not select.select([descendant], [], [], 0)[0], "Descendant exited before deletion was tested")
+            return {"rootExited": True, "captureComplete": True, "descendantStillAlive": True,
+                    "laterWriteSettled": not initial, "queuedCloseSettled": not initial,
+                    "deleteMilliseconds": round((time.monotonic() - started) * 1000)}
+    finally:
+        service.stop()
+
+
+def record_pipe_handles_released(work, command, fixture):
+    service = Service(work, command)
+    try:
+        wait_until(service.ready)
+
+        def run_and_delete():
+            record = service.launch(fixture, "emit")
+            def finished():
+                code, current = service.request("/executions/" + record["id"])
+                return code == 200 and current["state"] == "exited" and current["captureComplete"]
+            wait_until(finished)
+            require(service.request("/executions/" + record["id"], method="DELETE")[0] == 204, "Pipe fixture deletion failed")
+
+        run_and_delete()
+        descriptors = Path("/proc") / str(service.process.pid) / "fd"
+        before = len(list(descriptors.iterdir()))
+        for _ in range(PIPE_REUSE_EXECUTIONS):
+            run_and_delete()
+        after = len(list(descriptors.iterdir()))
+        require(after <= before + FD_BACKGROUND_ALLOWANCE, "Repeated execution deletion retained pipe descriptors")
+        return {"executionsDeleted": PIPE_REUSE_EXECUTIONS + 1, "descriptorsBefore": before, "descriptorsAfter": after}
     finally:
         service.stop()
 
@@ -358,7 +414,9 @@ def main():
     results = []
     for name, check in [("missing_api_key", missing_key), ("terminal_ctrl_c", terminal_interrupt),
                         ("spool_ownership", spool_lifetime), ("rotated_json_diagnostics", diagnostic_logs),
-                        ("exited_root_with_blocked_initial_input", exited_root_with_blocked_initial_input)]:
+                        ("exited_root_with_blocked_initial_input", lambda w, c, f: exited_root_with_blocked_input(w, c, f, True)),
+                        ("exited_root_with_blocked_later_input", lambda w, c, f: exited_root_with_blocked_input(w, c, f, False)),
+                        ("record_pipe_handles_released", record_pipe_handles_released)]:
         started = time.monotonic()
         try:
             evidence = check(work / name, command, fixture)

@@ -55,8 +55,16 @@ for long polling: new output wakes a pending read.
 A shell is an ordinary executable with explicit arguments and is not inserted
 automatically. V1 uses pipes: it does not provide a terminal, TUI or TTY-based
 interactive sudo. Explicit `sudo -S` is possible if sudo policy allows stdin.
-Pending initial stdin is cancelled when its managed root exits; a descendant
-holding that pipe does not keep record deletion waiting for initial delivery.
+When the managed root exits, stdin admission closes and pending initial or later
+writes are cancelled. Subsequent data writes return a conflict; close-only
+requests remain idempotent. Deletion waits for input operations to unwind before
+closing the owned pipe endpoints. The same cleanup task serves concurrent
+deletion attempts, and metadata is removed only after resource cleanup succeeds.
+A descendant holding stdin does not extend the managed root's lifetime.
+
+Failed launch setup rolls back its owned root and resources. If OS termination
+or reaping fails, the record remains discoverable with `launch_setup` and
+`launch_cleanup` errors instead of becoming an untracked process.
 
 Capture/storage failures are recorded in the execution's `errors` list. V1 does
 not kill the process, discard subsequent output or attempt storage recovery

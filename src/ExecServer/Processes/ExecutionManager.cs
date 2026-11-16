@@ -40,12 +40,12 @@ public sealed class ExecutionManager(ServerSettings settings, ILogger<ExecutionM
             var stderr = new OutputBuffer(settings.SpoolDirectory, settings.MemoryThresholdBytes);
             bool started = false;
             bool published = false;
-            ExecutionRecord? record = null;
+            var record = new ExecutionRecord(process, request, stdout, stderr);
             try
             {
                 started = process.Start();
                 if (!started) throw new IOException("The operating system refused process creation.");
-                record = new ExecutionRecord(process, request, stdout, stderr);
+                record.AttachStartedProcess();
                 if (!_records.TryAdd(record.Id, record)) throw new InvalidOperationException("Execution ID collision.");
                 published = true;
                 logger.LogInformation("Process started {ExecutionId} {Pid} {Executable} {Arguments} {Cwd} {Environment}",
@@ -53,9 +53,9 @@ public sealed class ExecutionManager(ServerSettings settings, ILogger<ExecutionM
                 _ = ObserveAsync(record);
                 return record;
             }
-            catch
+            catch (Exception setupError)
             {
-                if (published) _records.TryRemove(record!.Id, out _);
+                Exception? cleanupFailure = null;
                 try
                 {
                     if (started)
@@ -63,15 +63,23 @@ public sealed class ExecutionManager(ServerSettings settings, ILogger<ExecutionM
                         if (!process.HasExited) process.Kill();
                         if (!process.WaitForExit(FailedLaunchExitTimeoutMilliseconds))
                             throw new IOException("Started process did not exit during failed-launch cleanup.");
-                        record?.Completion.GetAwaiter().GetResult();
                     }
                 }
-                finally
+                catch (Exception error) when (error is System.ComponentModel.Win32Exception or InvalidOperationException or IOException)
                 {
-                    process.Dispose();
-                    stdout.DisposeAsync().AsTask().GetAwaiter().GetResult();
-                    stderr.DisposeAsync().AsTask().GetAwaiter().GetResult();
+                    if (!process.HasExited) cleanupFailure = error;
                 }
+                if (cleanupFailure is not null)
+                {
+                    record.AddError("launch_setup", setupError.Message);
+                    record.AddError("launch_cleanup", cleanupFailure.Message);
+                    if (!published && !_records.TryAdd(record.Id, record))
+                        throw new IOException("Failed launch could not retain its execution record.", cleanupFailure);
+                    _ = ObserveAsync(record);
+                    throw new IOException("Failed launch remains owned as execution " + record.Id + ".", cleanupFailure);
+                }
+                if (published) _records.TryRemove(record.Id, out _);
+                record.AbortAsync().GetAwaiter().GetResult();
                 throw;
             }
         }
@@ -80,10 +88,16 @@ public sealed class ExecutionManager(ServerSettings settings, ILogger<ExecutionM
     private async Task ObserveAsync(ExecutionRecord record)
     {
         await record.Completion.ConfigureAwait(false);
-        logger.LogInformation("Process exited {ExecutionId} {Pid} {ExitCode}", record.Id, record.Pid, record.Snapshot().ExitCode);
-        lock (_gate) CheckDrained();
-        await record.CaptureCompletion.ConfigureAwait(false);
-        if (record.CanAutoDelete) await DeleteAsync(record.Id).ConfigureAwait(false);
+        try
+        {
+            logger.LogInformation("Process exited {ExecutionId} {Pid} {ExitCode}", record.Id, record.Pid, record.Snapshot().ExitCode);
+        }
+        finally
+        {
+            lock (_gate) CheckDrained();
+            await record.CaptureCompletion.ConfigureAwait(false);
+            if (record.CanAutoDelete) await DeleteAsync(record.Id).ConfigureAwait(false);
+        }
     }
 
     public void BeginDrain()
@@ -101,8 +115,13 @@ public sealed class ExecutionManager(ServerSettings settings, ILogger<ExecutionM
         if (!_records.TryGetValue(id, out var record)) return false;
         if (!record.HasExited || !record.CaptureCompletion.IsCompleted)
             throw new InvalidOperationException("Execution or output capture is still active.");
-        if (!_records.TryRemove(id, out record)) return false;
-        await record.DisposeAsync().ConfigureAwait(false);
+        try { await record.DisposeAsync().ConfigureAwait(false); }
+        catch (Exception error) when (error is IOException or UnauthorizedAccessException)
+        {
+            record.AddError("cleanup", error.Message);
+            throw;
+        }
+        if (!_records.TryRemove(id, out _)) return false;
         logger.LogInformation("Execution deleted {ExecutionId}", id);
         return true;
     }

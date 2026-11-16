@@ -98,7 +98,7 @@ namespace ExecServer.Contracts
         /// Write text or bytes to a running execution
         /// </summary>
         /// <remarks>
-        /// Writes are serialized per execution. Exactly one of text or binary may be supplied; binary is strict base64, text is UTF-8. close=true closes the pipe after the optional payload. Closing is an operation, not a Ctrl-D byte. Pipe mode does not interpret Ctrl-C bytes as a signal.
+        /// Writes are serialized per execution. Exactly one of text or binary may be supplied; binary is strict base64, text is UTF-8. close=true closes the pipe after the optional payload. Root exit closes stdin admission and cancels pending initial and later writes; subsequent data writes return a conflict and close-only requests remain idempotent. Closing is an operation, not a Ctrl-D byte. Pipe mode does not interpret Ctrl-C bytes as a signal.
         /// </remarks>
         /// <param name="id">Opaque service-generated execution identifier, not an operating system PID.</param>
         /// <returns>Write accepted into the child stdin pipe, optionally followed by EOF.</returns>
