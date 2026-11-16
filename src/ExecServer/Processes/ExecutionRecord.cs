@@ -9,6 +9,7 @@ public sealed class ExecutionRecord : IAsyncDisposable
 {
     private readonly object _sync = new();
     private readonly SemaphoreSlim _inputGate = new(1, 1);
+    private readonly CancellationTokenSource _initialInputCancellation = new();
     private readonly List<ApiError> _errors = [];
     private readonly Stopwatch _elapsed = Stopwatch.StartNew();
     private bool _inputClosed;
@@ -86,6 +87,7 @@ public sealed class ExecutionRecord : IAsyncDisposable
             _endedAt = DateTimeOffset.UtcNow;
             _elapsed.Stop();
         }
+        await _initialInputCancellation.CancelAsync().ConfigureAwait(false);
     }
 
     private async Task ObserveCaptureAsync(Task stdoutPump, Task stderrPump)
@@ -111,8 +113,9 @@ public sealed class ExecutionRecord : IAsyncDisposable
         try
         {
             await WriteInputAsync(InputBytes(Request.Stdin?.Text, Request.Stdin?.Binary), Request.CloseStdin ?? false,
-                CancellationToken.None).ConfigureAwait(false);
+                _initialInputCancellation.Token).ConfigureAwait(false);
         }
+        catch (OperationCanceledException) when (_initialInputCancellation.IsCancellationRequested) { }
         catch (Exception error) when (error is IOException or ObjectDisposedException or InvalidOperationException)
         {
             AddError("stdin", error.Message);
@@ -170,5 +173,6 @@ public sealed class ExecutionRecord : IAsyncDisposable
         await Stderr.DisposeAsync().ConfigureAwait(false);
         Process.Dispose();
         _inputGate.Dispose();
+        _initialInputCancellation.Dispose();
     }
 }

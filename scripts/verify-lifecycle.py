@@ -15,6 +15,7 @@ import shutil
 import signal
 import socket
 import subprocess
+import sys
 import termios
 import threading
 import time
@@ -305,6 +306,41 @@ def diagnostic_logs(work, command, fixture):
         service.stop()
 
 
+def exited_root_with_blocked_initial_input(work, command, fixture):
+    service = Service(work, command)
+    try:
+        wait_until(service.ready)
+        child_pid_file = work / "owned-descendant.pid"
+        child_script = work / "hold-input.py"
+        child_script.write_text(
+            "import os, pathlib, sys, time\n"
+            "if os.fork(): os._exit(0)\n"
+            "pathlib.Path(sys.argv[1]).write_text(str(os.getpid()))\n"
+            "os.close(1); os.close(2)\n"
+            "time.sleep(8)\n")
+        code, record = service.request("/executions", {
+            "executable": sys.executable, "args": [str(child_script), str(child_pid_file)],
+            "stdin": {"text": "x" * (1024 * 1024)}, "durable": True, "waitMilliseconds": 0})
+        require(code in (201, 202), "Blocked-input fixture launch failed")
+        wait_until(lambda: child_pid_file.exists() and child_pid_file.read_text())
+        descendant = os.pidfd_open(int(child_pid_file.read_text()))
+        service.children.append((record["id"], descendant))
+
+        def finished():
+            status, current = service.request("/executions/" + record["id"])
+            return current if status == 200 and current["state"] == "exited" and current["captureComplete"] else None
+
+        wait_until(finished)
+        started = time.monotonic()
+        code, _ = service.request("/executions/" + record["id"], method="DELETE")
+        require(code == 204, "Exited root could not be deleted while descendant holds stdin")
+        require(not select.select([descendant], [], [], 0)[0], "Descendant exited before deletion was tested")
+        return {"rootExited": True, "captureComplete": True, "descendantStillAlive": True,
+                "deleteMilliseconds": round((time.monotonic() - started) * 1000)}
+    finally:
+        service.stop()
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--server-binary", type=Path)
@@ -321,7 +357,8 @@ def main():
     initial_hash = sha256(target)
     results = []
     for name, check in [("missing_api_key", missing_key), ("terminal_ctrl_c", terminal_interrupt),
-                        ("spool_ownership", spool_lifetime), ("rotated_json_diagnostics", diagnostic_logs)]:
+                        ("spool_ownership", spool_lifetime), ("rotated_json_diagnostics", diagnostic_logs),
+                        ("exited_root_with_blocked_initial_input", exited_root_with_blocked_initial_input)]:
         started = time.monotonic()
         try:
             evidence = check(work / name, command, fixture)

@@ -55,6 +55,13 @@ for long polling: new output wakes a pending read.
 A shell is an ordinary executable with explicit arguments and is not inserted
 automatically. V1 uses pipes: it does not provide a terminal, TUI or TTY-based
 interactive sudo. Explicit `sudo -S` is possible if sudo policy allows stdin.
+Pending initial stdin is cancelled when its managed root exits; a descendant
+holding that pipe does not keep record deletion waiting for initial delivery.
+
+Capture/storage failures are recorded in the execution's `errors` list. V1 does
+not kill the process, discard subsequent output or attempt storage recovery
+automatically. An affected pipe may stop being drained and block a producer.
+The client must inspect errors and choose the appropriate process control.
 
 Without durable retention, process exit and reading both final stream tails
 remove metadata and all output. Reading a tail abandons earlier bytes; byte-range

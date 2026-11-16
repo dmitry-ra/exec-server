@@ -27,5 +27,6 @@ for their OS/architecture and an API key.
 - `run-windows-vm-acceptance.ps1`: accept three self-contained files in a new
   private Windows directory without changing owner services or desktop settings.
 - `verify-lifecycle.py`: isolated real-terminal Ctrl-C, missing-key refusal,
-  exclusive spool and rotating-log checks. Supports a self-contained server;
+  exclusive spool, rotating-log and exited-root/blocked-initial-input checks.
+  Supports a self-contained server;
   see `docs/lifecycle-evidence.md`.
