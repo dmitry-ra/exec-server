@@ -140,8 +140,8 @@ void LogRotationFailureAndRecovery()
         logger.LogInformation("blocked twice");
         Directory.Delete(path + ".1");
         logger.LogInformation("recovered");
-        Check(File.ReadAllText(path).Contains("recovered", StringComparison.Ordinal), "logger recovered after failed rotation");
     }
+    Check(File.ReadAllText(path).Contains("recovered", StringComparison.Ordinal), "logger recovered after failed rotation");
     var length = new FileInfo(path).Length;
     logger.LogInformation("after disposal");
     Check(new FileInfo(path).Length == length, "disposed logger reopened its file");
