@@ -76,13 +76,16 @@ public sealed class ExecutionsController(ExecutionManager manager, ServerSetting
     private async Task<OutputChunk> ChunkAsync(OutputBuffer buffer, long offset, int? limit, string format,
         CancellationToken cancellationToken)
     {
+        // A completed buffer cannot grow. Observe completion before length so a
+        // final append cannot turn an older length into a false EOF indication.
+        bool complete = buffer.IsComplete;
         long total = buffer.Length;
         int count = (int)Math.Min(total - offset, Math.Min(limit ?? settings.MaxReadBytes, settings.MaxReadBytes));
         var chunk = new OutputChunk
         {
             Offset = offset, RequestedBytes = limit, TotalBytes = total,
             ReturnedBytes = count, NextOffset = offset + count, RemainingBytes = total - offset - count,
-            Eof = buffer.IsComplete && offset + count == total
+            Eof = complete && offset + count == total
         };
         if (count > settings.InlineBytes)
         {
