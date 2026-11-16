@@ -1,0 +1,14 @@
+<Solution>
+  <Folder Name="/src/">
+    <Project Path="src/ExecServer/ExecServer.csproj" />
+  </Folder>
+  <Folder Name="/tests/">
+    <Project Path="tests/ExecServer.Fixture/ExecServer.Fixture.csproj" />
+    <Project Path="tests/ExecServer.Storage.Tests/ExecServer.Storage.Tests.csproj" />
+    <Project Path="tests/ExecServer.Processes.Tests/ExecServer.Processes.Tests.csproj" />
+  </Folder>
+  <Folder Name="/tools/">
+    <Project Path="tools/ContractGenerator/ContractGenerator.csproj" />
+    <Project Path="tools/ExecServer.Harness/ExecServer.Harness.csproj" />
+  </Folder>
+</Solution>

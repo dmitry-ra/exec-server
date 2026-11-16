@@ -1,0 +1,8 @@
+bin/
+obj/
+.artifacts/
+.sdk/
+.vs/
+*.user
+__pycache__/
+*.pyc

@@ -1,0 +1,6 @@
+<Project>
+  <PropertyGroup>
+    <RestorePackagesWithLockFile>true</RestorePackagesWithLockFile>
+    <ExecServerRuntimeIdentifiers>linux-x64;win-x64;osx-x64;osx-arm64</ExecServerRuntimeIdentifiers>
+  </PropertyGroup>
+</Project>

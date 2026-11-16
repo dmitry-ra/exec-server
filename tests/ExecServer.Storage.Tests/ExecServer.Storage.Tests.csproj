@@ -1,0 +1,16 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net11.0</TargetFramework>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+    <TreatWarningsAsErrors>true</TreatWarningsAsErrors>
+  </PropertyGroup>
+  <ItemGroup>
+    <Compile Include="../../src/ExecServer/Storage/OutputBuffer.cs" Link="OutputBuffer.cs" />
+    <Compile Include="../../src/ExecServer/Diagnostics/JsonFileLoggerProvider.cs" Link="JsonFileLoggerProvider.cs" />
+    <Compile Include="../../src/ExecServer/ServerSettings.cs" Link="ServerSettings.cs" />
+    <FrameworkReference Include="Microsoft.AspNetCore.App" />
+    <Using Include="Microsoft.Extensions.Logging" />
+  </ItemGroup>
+</Project>
