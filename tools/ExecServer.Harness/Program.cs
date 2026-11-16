@@ -90,9 +90,12 @@ sealed class Suite(HttpClient client, string fixture, string? dotnet)
         return body;
     }
 
-    private async Task<JsonNode> StartAsync(string mode, string? argument = null, bool durable = true, object? input = null, bool close = false)
+    private Task<JsonNode> StartAsync(string mode, string? argument = null, bool durable = true, object? input = null, bool close = false)
+        => StartBodyAsync(Launch(mode, argument, durable, input, close));
+
+    private async Task<JsonNode> StartBodyAsync(JsonObject body)
     {
-        using var response = await client.PostAsJsonAsync("v1/executions", Launch(mode, argument, durable, input, close));
+        using var response = await client.PostAsJsonAsync("v1/executions", body);
         Check(response.StatusCode is HttpStatusCode.Created or HttpStatusCode.Accepted, $"launch returned {(int)response.StatusCode}");
         var record = await JsonAsync(response);
         _retained.Add(Text(record, "id"));
@@ -373,7 +376,15 @@ sealed class Suite(HttpClient client, string fixture, string? dotnet)
 
     private async Task ClosedStreamLongPollAsync()
     {
-        var id = Text(await StartAsync("closed-stdout-delayed-stderr", "800"), "id");
+        using var status = await client.GetAsync("v1/status");
+        var body = Launch("closed-stdout-delayed-stderr", "800");
+        if (Text(await JsonAsync(status), "operatingSystem") == "macos")
+        {
+            // A native shell establishes real EOF without CLR-owned stdio aliases.
+            body["executable"] = "/bin/sh";
+            body["args"] = new JsonArray("-c", "printf 'ready\\n'; exec 1>&-; printf 'ready\\n' >&2; while IFS= read -r line; do :; done; /bin/sleep 0.8; printf 'later\\n' >&2");
+        }
+        var id = Text(await StartBodyAsync(body), "id");
         for (var i = 0; ; i++)
         {
             var initial = await OutputAsync(id);
