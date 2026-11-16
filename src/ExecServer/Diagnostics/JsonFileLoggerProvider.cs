@@ -10,6 +10,7 @@ public sealed class JsonFileLoggerProvider : ILoggerProvider
     private readonly ServerSettings _settings;
     private readonly string _path;
     private FileStream? _file;
+    private bool _disposed;
 
     public JsonFileLoggerProvider(ServerSettings settings)
     {
@@ -46,12 +47,15 @@ public sealed class JsonFileLoggerProvider : ILoggerProvider
         })) + "\n");
         lock (_gate)
         {
-            if (_file is null) return;
+            if (_disposed) return;
             try
             {
+                _file ??= Open();
                 if (_file.Length > 0 && _file.Length + line.Length > _settings.LogFileBytes)
                 {
-                    _file.Dispose();
+                    var previous = _file;
+                    _file = null;
+                    previous.Dispose();
                     for (int index = _settings.LogFileCount - 1; index > 0; index--)
                     {
                         string source = index == 1 ? _path : _path + "." + (index - 1);
@@ -63,7 +67,7 @@ public sealed class JsonFileLoggerProvider : ILoggerProvider
                 _file.Write(line);
                 _file.Flush();
             }
-            catch (IOException)
+            catch (Exception error) when (error is IOException or UnauthorizedAccessException)
             {
                 Console.Error.WriteLine("{\"event\":\"diagnostic_storage_error\"}");
             }
@@ -71,7 +75,16 @@ public sealed class JsonFileLoggerProvider : ILoggerProvider
     }
 
     public ILogger CreateLogger(string categoryName) => new JsonLogger(this, categoryName);
-    public void Dispose() { lock (_gate) { _file?.Dispose(); _file = null; } }
+    public void Dispose()
+    {
+        lock (_gate)
+        {
+            _disposed = true;
+            var previous = _file;
+            _file = null;
+            previous?.Dispose();
+        }
+    }
 
     private sealed class JsonLogger(JsonFileLoggerProvider provider, string category) : ILogger
     {

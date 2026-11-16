@@ -1,4 +1,6 @@
 using ExecServer.Storage;
+using ExecServer;
+using ExecServer.Diagnostics;
 
 var root = Path.Combine(Path.GetTempPath(), "exec-server-storage-tests-" + Guid.NewGuid().ToString("N"));
 Directory.CreateDirectory(root);
@@ -9,7 +11,8 @@ try
     await ConcurrentAppendRead();
     await FailedSpillWakesAndPreservesPrefix();
     await DisposeSerializesWithRead();
-    Console.WriteLine("PASS: storage binary spill, offsets, wakeups, concurrency, failure, disposal");
+    LogRotationFailureAndRecovery();
+    Console.WriteLine("PASS: storage binary spill, offsets, wakeups, concurrency, failure, disposal, log rotation recovery");
 }
 finally { Directory.Delete(root, true); }
 
@@ -119,6 +122,27 @@ async Task DisposeSerializesWithRead()
     Check((await read).SequenceEqual(data), "active read completed before disposal");
     await dispose;
     Check(!Directory.EnumerateFiles(root).Any(), "disposal cleanup");
+}
+
+void LogRotationFailureAndRecovery()
+{
+    var directory = Path.Combine(root, "log-rotation");
+    var path = Path.Combine(directory, "server.jsonl");
+    using var provider = new JsonFileLoggerProvider(new ServerSettings
+        { LogDirectory = directory, LogFileBytes = 1, LogFileCount = 2 });
+    var logger = provider.CreateLogger("rotation-test");
+    logger.LogInformation("before");
+    // An owned directory blocks rotation on every OS, without permission changes.
+    Directory.CreateDirectory(path + ".1");
+    logger.LogInformation("blocked once");
+    logger.LogInformation("blocked twice");
+    Directory.Delete(path + ".1");
+    logger.LogInformation("recovered");
+    Check(File.ReadAllText(path).Contains("recovered", StringComparison.Ordinal), "logger recovered after failed rotation");
+    provider.Dispose();
+    var length = new FileInfo(path).Length;
+    logger.LogInformation("after disposal");
+    Check(new FileInfo(path).Length == length, "disposed logger reopened its file");
 }
 
 static void Check(bool condition, string message)

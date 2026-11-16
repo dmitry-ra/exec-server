@@ -7,14 +7,16 @@ Run from the repository root:
 ```
 
 This independent executable harness has no third-party packages. It compiles the
-actual `OutputBuffer.cs` directly, so storage can be tested independently of the
-HTTP host. On Windows, use the installed `dotnet` without the `.sdk/` prefix.
+actual output buffer and JSON logger sources directly, so storage can be tested
+independently of the HTTP host. It references the SDK's ASP.NET shared framework.
+On Windows, use the installed `dotnet` without the `.sdk/` prefix.
 
 Checks cover complete byte preservation across memory-to-file spill, offsets,
 waking on append/EOF/error, wait cancellation, concurrent reads, spill-file
 creation failure without losing the captured prefix, and waiting for an active
 read before deleting its file. Each run uses and removes only its own temporary
-directory.
+directory. A blocked log-rotation destination verifies repeated failures do not
+escape logging, later writes recover, and disposal prevents reopening.
 
 Storage does not interpret UTF-8 or decide execution retention; those belong to
 the HTTP contract and execution manager. The operator must protect the spool
