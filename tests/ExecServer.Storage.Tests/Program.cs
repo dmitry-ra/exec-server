@@ -128,18 +128,20 @@ void LogRotationFailureAndRecovery()
 {
     var directory = Path.Combine(root, "log-rotation");
     var path = Path.Combine(directory, "server.jsonl");
-    using var provider = new JsonFileLoggerProvider(new ServerSettings
-        { LogDirectory = directory, LogFileBytes = 1, LogFileCount = 2 });
-    var logger = provider.CreateLogger("rotation-test");
-    logger.LogInformation("before");
-    // An owned directory blocks rotation on every OS, without permission changes.
-    Directory.CreateDirectory(path + ".1");
-    logger.LogInformation("blocked once");
-    logger.LogInformation("blocked twice");
-    Directory.Delete(path + ".1");
-    logger.LogInformation("recovered");
-    Check(File.ReadAllText(path).Contains("recovered", StringComparison.Ordinal), "logger recovered after failed rotation");
-    provider.Dispose();
+    ILogger logger;
+    using (var provider = new JsonFileLoggerProvider(new ServerSettings
+        { LogDirectory = directory, LogFileBytes = 1, LogFileCount = 2 }))
+    {
+        logger = provider.CreateLogger("rotation-test");
+        logger.LogInformation("before");
+        // An owned directory blocks rotation on every OS, without permission changes.
+        Directory.CreateDirectory(path + ".1");
+        logger.LogInformation("blocked once");
+        logger.LogInformation("blocked twice");
+        Directory.Delete(path + ".1");
+        logger.LogInformation("recovered");
+        Check(File.ReadAllText(path).Contains("recovered", StringComparison.Ordinal), "logger recovered after failed rotation");
+    }
     var length = new FileInfo(path).Length;
     logger.LogInformation("after disposal");
     Check(new FileInfo(path).Length == length, "disposed logger reopened its file");
