@@ -41,15 +41,25 @@ $listener.Start()
 $port = $listener.LocalEndpoint.Port
 $listener.Stop()
 $url = 'http://127.0.0.1:' + $port
-$env:EXECSERVER_API_KEY = $key
-$env:ExecServer__SpoolDirectory = Join-Path $Root 'spool'
-$env:ExecServer__LogDirectory = Join-Path $Root 'logs'
-$env:ExecServer__MemoryThresholdBytes = '1024'
-$env:ExecServer__InlineBytes = '4096'
 $service = $null
 try {
-    $service = Start-Process -FilePath (Join-Path $serverDir 'exec-server.exe') -ArgumentList @('--urls',$url) -PassThru -WindowStyle Hidden -RedirectStandardOutput (Join-Path $Root 'server.stdout.jsonl') -RedirectStandardError (Join-Path $Root 'server.stderr.txt')
-    $env:EXECSERVER_API_KEY = $null
+    $start = New-Object Diagnostics.ProcessStartInfo
+    $start.FileName = Join-Path $serverDir 'exec-server.exe'
+    $start.Arguments = '--urls ' + $url
+    $start.UseShellExecute = $false
+    $start.CreateNoWindow = $true
+    $start.RedirectStandardOutput = $true
+    $start.RedirectStandardError = $true
+    $start.EnvironmentVariables['EXECSERVER_API_KEY'] = $key
+    $start.EnvironmentVariables['ExecServer__SpoolDirectory'] = Join-Path $Root 'spool'
+    $start.EnvironmentVariables['ExecServer__LogDirectory'] = Join-Path $Root 'logs'
+    $start.EnvironmentVariables['ExecServer__MemoryThresholdBytes'] = '1024'
+    $start.EnvironmentVariables['ExecServer__InlineBytes'] = '4096'
+    $service = New-Object Diagnostics.Process
+    $service.StartInfo = $start
+    if (-not $service.Start()) { throw 'Server process was not created.' }
+    $stdoutTask = $service.StandardOutput.ReadToEndAsync()
+    $stderrTask = $service.StandardError.ReadToEndAsync()
     $ready = $false
     for ($attempt = 0; $attempt -lt $ReadinessAttempts; $attempt++) {
         $service.Refresh()
@@ -65,6 +75,8 @@ try {
     & $harness --url $url --token-file $keyFile --fixture (Join-Path $Root 'exec-server-fixture.exe') --include-shutdown | Set-Content -Encoding UTF8 (Join-Path $Root 'harness.json')
     $result = $LASTEXITCODE
     if (-not $service.WaitForExit($ExitWaitMilliseconds)) { throw 'Server did not exit after drain.' }
+    [IO.File]::WriteAllText((Join-Path $Root 'server.stdout.jsonl'),$stdoutTask.GetAwaiter().GetResult())
+    [IO.File]::WriteAllText((Join-Path $Root 'server.stderr.txt'),$stderrTask.GetAwaiter().GetResult())
     $os = Get-CimInstance Win32_OperatingSystem
     $receipt = [ordered]@{
         os = $os.Caption; version = $os.Version; build = $os.BuildNumber
@@ -76,7 +88,6 @@ try {
     $receipt | ConvertTo-Json -Depth 20 -Compress
     if ($result -ne 0 -or $service.ExitCode -ne 0) { exit 1 }
 } finally {
-    $env:EXECSERVER_API_KEY = $null
     if ($null -ne $service) {
         $service.Refresh()
         if (-not $service.HasExited) {
