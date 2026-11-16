@@ -147,6 +147,13 @@ sealed class Suite(HttpClient client, string fixture, string? dotnet)
 
     private async Task AuthenticationAsync()
     {
+        foreach (var prefix in new[] { "Bearer ", "bearer ", "bEaReR   " })
+        {
+            using var request = new HttpRequestMessage(HttpMethod.Get, "v1/status");
+            request.Headers.TryAddWithoutValidation("Authorization", prefix + client.DefaultRequestHeaders.Authorization!.Parameter);
+            using var response = await client.SendAsync(request);
+            Check(response.StatusCode == HttpStatusCode.OK, "valid case-insensitive Bearer scheme or spacing was rejected");
+        }
         var marker = "exec-server-denied-" + Guid.NewGuid().ToString("N");
         string?[] keys = [null, "deliberately-invalid-harness-key"];
         foreach (var key in keys)

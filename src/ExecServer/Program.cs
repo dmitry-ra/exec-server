@@ -1,4 +1,5 @@
 using System.ComponentModel;
+using System.Net.Http.Headers;
 using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
@@ -48,9 +49,10 @@ try
     app.Use(async (context, next) =>
     {
         long started = System.Diagnostics.Stopwatch.GetTimestamp();
-        string? authorization = context.Request.Headers.Authorization;
-        if (authorization is null || !authorization.StartsWith("Bearer ", StringComparison.Ordinal)
-            || !CryptographicOperations.FixedTimeEquals(keyHash, SHA256.HashData(Encoding.UTF8.GetBytes(authorization[7..]))))
+        if (!AuthenticationHeaderValue.TryParse(context.Request.Headers.Authorization, out var authorization)
+            || !authorization.Scheme.Equals("Bearer", StringComparison.OrdinalIgnoreCase)
+            || authorization.Parameter is not { } credential
+            || !CryptographicOperations.FixedTimeEquals(keyHash, SHA256.HashData(Encoding.UTF8.GetBytes(credential))))
         {
             context.Response.StatusCode = 401;
             context.Response.Headers.WWWAuthenticate = "Bearer";
