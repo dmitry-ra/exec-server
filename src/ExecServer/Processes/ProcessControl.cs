@@ -14,7 +14,7 @@ public static partial class ProcessControl
     public static void Signal(int pid, int signal)
     {
         if (OperatingSystem.IsWindows()) throw new ApiFault(501, "unsupported_signal", "Unix signals are not supported on Windows.");
-        if (pid <= 0 || signal <= 0) throw new ApiFault(400, "invalid_signal", "PID and signal must be positive; process-group selectors are not accepted.");
+        if (pid <= 0 || signal < 0) throw new ApiFault(400, "invalid_signal", "PID must be positive and signal must be non-negative; process-group selectors are not accepted.");
         if (Kill(pid, signal) != 0) throw new ApiFault(400, "signal_failed", new Win32Exception(Marshal.GetLastPInvokeError()).Message);
     }
 

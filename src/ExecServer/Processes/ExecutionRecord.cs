@@ -124,7 +124,11 @@ public sealed class ExecutionRecord : IAsyncDisposable
         await _inputGate.WaitAsync(cancellationToken).ConfigureAwait(false);
         try
         {
-            if (_inputClosed) throw new InvalidOperationException("stdin is already closed.");
+            if (_inputClosed)
+            {
+                if (close && data.Length == 0) return 0;
+                throw new InvalidOperationException("stdin is already closed.");
+            }
             if (data.Length > 0)
             {
                 await Process.StandardInput.BaseStream.WriteAsync(data, cancellationToken).ConfigureAwait(false);

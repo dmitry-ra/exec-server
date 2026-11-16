@@ -9,6 +9,7 @@ fi
 export EXECSERVER_API_KEY
 EXECSERVER_API_KEY="$(cat .artifacts/dev.key)"
 export ExecServer__SpoolDirectory="$PWD/.artifacts/dev-spool"
+export ExecServer__LogDirectory="$PWD/.artifacts/dev-logs"
 export ExecServer__MemoryThresholdBytes=1024
 export ExecServer__MaxReadBytes=65536
 export ExecServer__InlineBytes=4096

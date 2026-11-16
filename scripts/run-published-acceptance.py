@@ -34,6 +34,36 @@ def free_port():
         return probe.getsockname()[1]
 
 
+def reject_broken_links(server, environment, private, public_log, output):
+    checks = {}
+    for kind, filename, setting in (
+            ("spool", ".lock", "ExecServer__SpoolDirectory"),
+            ("log", "server.jsonl", "ExecServer__LogDirectory")):
+        case = private / ("broken-link-" + kind)
+        directory = case / "configured"
+        directory.mkdir(parents=True)
+        target = case / "outside-configured-directory"
+        link = directory / filename
+        link.symlink_to(target)
+        probe_environment = dict(environment)
+        probe_environment.update({"ExecServer__SpoolDirectory": str(case / "spool"),
+                                  "ExecServer__LogDirectory": str(case / "logs"),
+                                  setting: str(directory)})
+        result = subprocess.run([str(server), "--urls", "http://127.0.0.1:" + str(free_port())],
+                                cwd=server.parent, env=probe_environment, stdin=subprocess.DEVNULL,
+                                stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                                timeout=START_TIMEOUT_SECONDS)
+        public_log(result.stdout, output / ("broken-link-" + kind + ".stdout.log"))
+        public_log(result.stderr, output / ("broken-link-" + kind + ".stderr.log"))
+        if result.returncode == 0 or b"symbolic link" not in result.stdout + result.stderr:
+            raise RuntimeError("Published server did not reject the broken " + kind + " link")
+        if target.exists() or not link.is_symlink():
+            raise RuntimeError("Broken-link rejection modified the outside target or link")
+        checks[kind] = {"rejected": True, "outside_target_created": False,
+                        "server_exit_code": result.returncode}
+    return checks
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--server-binary", type=Path, required=True)
@@ -119,6 +149,8 @@ def main():
         server_stdout = private / "server.stdout"
         server_stderr = private / "server.stderr"
         try:
+            receipt["broken_symlink_checks"] = reject_broken_links(
+                server, environment, private, public_log, output)
             with server_stdout.open("wb") as stdout, server_stderr.open("wb") as stderr:
                 process = subprocess.Popen([str(server), "--urls", base], cwd=server_dir,
                                            env=environment, stdin=subprocess.DEVNULL,

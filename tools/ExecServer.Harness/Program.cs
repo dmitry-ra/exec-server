@@ -236,6 +236,12 @@ sealed class Suite(HttpClient client, string fixture, string? dotnet)
         Check(write.IsSuccessStatusCode, "later stdin failed");
         using var close = await client.PostAsync($"v1/executions/{id}/close-stdin", null);
         Check(close.IsSuccessStatusCode, "stdin EOF failed");
+        using var repeatedClose = await client.PostAsync($"v1/executions/{id}/close-stdin", null);
+        var closed = await JsonAsync(repeatedClose);
+        Check(repeatedClose.IsSuccessStatusCode && closed["closed"]!.GetValue<bool>()
+            && Number(closed, "bytesWritten") == 0, "repeated stdin EOF was not harmless");
+        using var lateWrite = await client.PostAsJsonAsync($"v1/executions/{id}/stdin", new { text = "third" });
+        Check(lateWrite.StatusCode == HttpStatusCode.Conflict, "stdin accepted data after EOF");
         await WaitAsync(id);
         var output = await OutputAsync(id);
         Check(Encoding.UTF8.GetString(await ReadChunkAsync(output["stdout"]!)) == "first:second", "stdin ordering/content changed");
@@ -408,6 +414,11 @@ sealed class Suite(HttpClient client, string fixture, string? dotnet)
         var os = Text(await JsonAsync(status), "operatingSystem");
         var record = await StartAsync("sleep", "3000");
         var id = Text(record, "id");
+        using var existence = await client.PostAsJsonAsync("v1/signals", new { pid = Number(record, "pid"), signal = 0 });
+        Check(existence.StatusCode == (os.Contains("windows", StringComparison.OrdinalIgnoreCase)
+            ? HttpStatusCode.NotImplemented : HttpStatusCode.NoContent), "signal zero violated platform contract");
+        using var stillRunning = await client.GetAsync($"v1/executions/{id}");
+        Check(Text(await JsonAsync(stillRunning), "state") == "running", "signal zero terminated the process");
         using var signal = await client.PostAsJsonAsync("v1/signals", new { pid = Number(record, "pid"), signal = 15 });
         if (os.Contains("windows", StringComparison.OrdinalIgnoreCase))
             Check(signal.StatusCode == HttpStatusCode.NotImplemented, "Windows emulated a Unix signal");
